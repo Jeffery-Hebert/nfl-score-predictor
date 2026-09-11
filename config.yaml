@@ -1,0 +1,31 @@
+project:
+  name: nfl-score-predictor
+  target: final_score_pair   # home_score, away_score
+
+data:
+  source: nflreadpy
+  season_start: 2019
+  season_end: 2026            # current season, updated automatically each week
+
+training:
+  retrain_day: wednesday
+  retrain_time_local: "17:00"
+  timezone: America/Chicago
+  recency_half_life_weeks: 17  # ~1 season; will be tuned empirically on Day 3
+
+models:
+  - linear_regression
+  - logistic_regression
+  - poisson_glm
+  - random_forest
+  - xgboost
+  - lightgbm
+  - catboost
+  - mlp
+  - gaussian_process
+  - bayesian_hierarchical
+  - monte_carlo_simulation
+
+meta_model:
+  type: ridge_stacker
+  validation: walk_forward_out_of_fold
