@@ -44,6 +44,36 @@ def walk_forward_evaluate(df: pd.DataFrame, fit_fn, predict_fn,
 
     return pd.concat(results, ignore_index=True)
 
+def walk_forward_evaluate_by_season(df: pd.DataFrame, fit_fn, predict_fn,
+                                     min_train_seasons: int = 2) -> pd.DataFrame:
+    """
+    Coarser-grained walk-forward: refits once per SEASON instead of once per
+    week. Still fully leakage-safe (trains only on seasons strictly before
+    the test season) -- just a cheaper validation granularity, appropriate
+    for computationally expensive models where weekly refitting is
+    impractical.
+    """
+    df = df.dropna(subset=["home_score", "away_score"]).copy()
+    seasons = sorted(df["season"].unique())
+    test_seasons = seasons[min_train_seasons:]
+
+    results = []
+    for season in test_seasons:
+        train = df[df["season"] < season]
+        test = df[df["season"] == season]
+        if len(train) < 50 or len(test) == 0:
+            continue
+
+        model = fit_fn(train)
+        home_pred, away_pred = predict_fn(model, test)
+
+        fold_result = test[["game_id", "season", "week", "home_score", "away_score"]].copy()
+        fold_result["home_pred"] = home_pred
+        fold_result["away_pred"] = away_pred
+        results.append(fold_result)
+
+    return pd.concat(results, ignore_index=True)
+
 def score_predictions(results: pd.DataFrame) -> dict:
     home_err = results["home_score"] - results["home_pred"]
     away_err = results["away_score"] - results["away_pred"]
