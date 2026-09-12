@@ -24,6 +24,13 @@ def predict_baseline(model: dict, test: pd.DataFrame):
     away_pred = away_pred.fillna(test["away_pregame_team_score"].mean())
     return home_pred, away_pred
 
+def fit_league_average(train: pd.DataFrame) -> dict:
+    return {"avg": train["home_score"].mean() * 0.5 + train["away_score"].mean() * 0.5}
+
+def predict_league_average(model: dict, test: pd.DataFrame):
+    n = len(test)
+    return pd.Series([model["avg"]] * n, index=test.index), pd.Series([model["avg"]] * n, index=test.index)
+
 def main():
     df = pd.read_parquet("data/processed/model_table.parquet")
     results = walk_forward_evaluate(df, fit_baseline, predict_baseline, min_train_seasons=2)
@@ -36,6 +43,12 @@ def main():
     out_path = Path("data/processed/baseline_predictions.parquet")
     results.to_parquet(out_path, index=False)
     print(f"Saved fold-by-fold predictions to {out_path}")
+
+    floor_results = walk_forward_evaluate(df, fit_league_average, predict_league_average, min_train_seasons=2)
+    floor_metrics = score_predictions(floor_results)
+    print("\nTrivial floor (always predict league-average score):")
+    for k, v in floor_metrics.items():
+        print(f"  {k}: {v:.3f}" if isinstance(v, float) else f"  {k}: {v}")
 
 if __name__ == "__main__":
     main()
