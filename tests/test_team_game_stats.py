@@ -32,3 +32,7 @@ def test_epa_columns_populated_for_played_games(df):
     completed = df.dropna(subset=["team_score"])
     null_pct = completed["off_epa_per_play"].isna().mean()
     assert null_pct < 0.02, f"{null_pct:.1%} of played games missing offensive EPA — investigate"
+
+def test_exactly_32_teams(df):
+    n_teams = df["team"].nunique()
+    assert n_teams == 32, f"Expected 32 NFL franchises, found {n_teams} — check for unmapped relocations/renames"

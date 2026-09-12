@@ -9,6 +9,16 @@ Output: data/processed/team_game_stats.parquet
 import pandas as pd
 from pathlib import Path
 
+
+TEAM_CODE_MAP = {
+    "OAK": "LV",  # Raiders: Oakland (through 2019) -> Las Vegas (2020+)
+}
+
+def normalize_team_codes(df: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
+    for col in cols:
+        df[col] = df[col].replace(TEAM_CODE_MAP)
+    return df
+
 def build_offense_stats(pbp: pd.DataFrame) -> pd.DataFrame:
     plays = pbp[pbp["play_type"].notna() & pbp["posteam"].notna()]
     off = plays.groupby(["game_id", "posteam"]).agg(
@@ -29,6 +39,7 @@ def build_defense_stats(pbp: pd.DataFrame) -> pd.DataFrame:
 
 def build_team_game_rows(schedules: pd.DataFrame) -> pd.DataFrame:
     """One row per team per game, from the home/away perspective."""
+    schedules = normalize_team_codes(schedules, ["home_team", "away_team"])
     home = schedules.copy()
     home["team"] = home["home_team"]
     home["opponent"] = home["away_team"]
