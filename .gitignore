@@ -3,4 +3,4 @@ data/raw/
 data/processed/
 __pycache__/
 *.pyc
-.pytensor/
+.pytensor/catboost_info/
