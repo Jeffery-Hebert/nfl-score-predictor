@@ -13,8 +13,8 @@ def fit_rf(train: pd.DataFrame) -> dict:
     X = train[FEATURE_COLS]
     means = X.mean()
     X_filled = X.fillna(means)
-    home_model = RandomForestRegressor(n_estimators=200, max_depth=6, random_state=42, n_jobs=-1).fit(X_filled, train["home_score"])
-    away_model = RandomForestRegressor(n_estimators=200, max_depth=6, random_state=42, n_jobs=-1).fit(X_filled, train["away_score"])
+    home_model = RandomForestRegressor(n_estimators=300, max_depth=4, min_samples_leaf=15, random_state=42, n_jobs=-1).fit(X_filled, train["home_score"])
+    away_model = RandomForestRegressor(n_estimators=300, max_depth=4, min_samples_leaf=15, random_state=42, n_jobs=-1).fit(X_filled, train["away_score"])
     return {"home_model": home_model, "away_model": away_model, "means": means}
 
 def predict_rf(model: dict, test: pd.DataFrame):

@@ -10,7 +10,7 @@ from src.validate.walk_forward import walk_forward_evaluate, score_predictions
 
 def fit_xgb(train: pd.DataFrame) -> dict:
     X = train[FEATURE_COLS]
-    params = dict(n_estimators=200, max_depth=4, learning_rate=0.05, random_state=42, n_jobs=-1)
+    params = dict(n_estimators=100, max_depth=3, learning_rate=0.03, subsample=0.8, colsample_bytree=0.8, reg_alpha=1.0, reg_lambda=1.0, random_state=42, n_jobs=-1)
     home_model = XGBRegressor(**params).fit(X, train["home_score"])
     away_model = XGBRegressor(**params).fit(X, train["away_score"])
     return {"home_model": home_model, "away_model": away_model}

@@ -10,7 +10,7 @@ from src.validate.walk_forward import walk_forward_evaluate, score_predictions
 
 def fit_catboost(train: pd.DataFrame) -> dict:
     X = train[FEATURE_COLS]
-    params = dict(iterations=200, depth=4, learning_rate=0.05, random_seed=42, verbose=False)
+    params = dict(iterations=100, depth=3, learning_rate=0.03, l2_leaf_reg=5.0, random_seed=42, verbose=False)
     home_model = CatBoostRegressor(**params).fit(X, train["home_score"])
     away_model = CatBoostRegressor(**params).fit(X, train["away_score"])
     return {"home_model": home_model, "away_model": away_model}
