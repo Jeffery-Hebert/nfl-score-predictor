@@ -6,12 +6,14 @@ but included per spec.
 
 Run: python -m src.models.logistic
 """
+
 import pandas as pd
 import numpy as np
 from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
 from src.models.common import FEATURE_COLS
 from src.validate.walk_forward import walk_forward_evaluate, score_predictions
+
 
 def fit_logistic(train: pd.DataFrame) -> dict:
     X = train[FEATURE_COLS]
@@ -24,11 +26,22 @@ def fit_logistic(train: pd.DataFrame) -> dict:
     clf = LogisticRegression(max_iter=1000).fit(X_scaled, y)
 
     avg_total = (train["home_score"] + train["away_score"]).mean()
-    avg_margin_when_home_wins = (train["home_score"] - train["away_score"])[y == 1].mean()
-    avg_margin_when_away_wins = (train["home_score"] - train["away_score"])[y == 0].mean()
+    avg_margin_when_home_wins = (train["home_score"] - train["away_score"])[
+        y == 1
+    ].mean()
+    avg_margin_when_away_wins = (train["home_score"] - train["away_score"])[
+        y == 0
+    ].mean()
 
-    return {"clf": clf, "scaler": scaler, "means": means, "avg_total": avg_total,
-            "margin_win": avg_margin_when_home_wins, "margin_loss": avg_margin_when_away_wins}
+    return {
+        "clf": clf,
+        "scaler": scaler,
+        "means": means,
+        "avg_total": avg_total,
+        "margin_win": avg_margin_when_home_wins,
+        "margin_loss": avg_margin_when_away_wins,
+    }
+
 
 def predict_logistic(model: dict, test: pd.DataFrame):
     X = test[FEATURE_COLS].fillna(model["means"])
@@ -41,14 +54,18 @@ def predict_logistic(model: dict, test: pd.DataFrame):
     away_pred = (total - margin) / 2
     return home_pred, away_pred
 
+
 def main():
     df = pd.read_parquet("data/processed/model_table.parquet")
-    results = walk_forward_evaluate(df, fit_logistic, predict_logistic, min_train_seasons=2)
+    results = walk_forward_evaluate(
+        df, fit_logistic, predict_logistic, min_train_seasons=2
+    )
     metrics = score_predictions(results)
     print("Logistic Regression (win-prob -> score) walk-forward results:")
     for k, v in metrics.items():
         print(f"  {k}: {v:.3f}" if isinstance(v, float) else f"  {k}: {v}")
     results.to_parquet("data/processed/logistic_predictions.parquet", index=False)
+
 
 if __name__ == "__main__":
     main()

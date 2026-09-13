@@ -7,11 +7,13 @@ take longer and produce a bigger file.
 Run: python src/ingest/pull_pbp.py
 Output: data/raw/pbp.parquet
 """
+
 import nflreadpy as nfl
 from pathlib import Path
 
 SEASON_START = 2019
 SEASON_END = 2026
+
 
 def main():
     seasons = list(range(SEASON_START, SEASON_END + 1))
@@ -24,6 +26,7 @@ def main():
 
     print(f"Pulled {len(df)} plays across seasons {seasons[0]}-{seasons[-1]}")
     print(f"Saved to {out_path}")
+
 
 if __name__ == "__main__":
     main()

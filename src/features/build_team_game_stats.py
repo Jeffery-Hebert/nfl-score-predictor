@@ -6,36 +6,50 @@ features used by every downstream model.
 Run: python src/features/build_team_game_stats.py
 Output: data/processed/team_game_stats.parquet
 """
+
 import pandas as pd
 from pathlib import Path
-
 
 TEAM_CODE_MAP = {
     "OAK": "LV",  # Raiders: Oakland (through 2019) -> Las Vegas (2020+)
 }
+
 
 def normalize_team_codes(df: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
     for col in cols:
         df[col] = df[col].replace(TEAM_CODE_MAP)
     return df
 
+
 def build_offense_stats(pbp: pd.DataFrame) -> pd.DataFrame:
     plays = pbp[pbp["play_type"].notna() & pbp["posteam"].notna()]
-    off = plays.groupby(["game_id", "posteam"]).agg(
-        off_plays=("epa", "count"),
-        off_epa_per_play=("epa", "mean"),
-        off_success_rate=("success", "mean"),
-    ).reset_index().rename(columns={"posteam": "team"})
+    off = (
+        plays.groupby(["game_id", "posteam"])
+        .agg(
+            off_plays=("epa", "count"),
+            off_epa_per_play=("epa", "mean"),
+            off_success_rate=("success", "mean"),
+        )
+        .reset_index()
+        .rename(columns={"posteam": "team"})
+    )
     return off
+
 
 def build_defense_stats(pbp: pd.DataFrame) -> pd.DataFrame:
     plays = pbp[pbp["play_type"].notna() & pbp["defteam"].notna()]
-    deff = plays.groupby(["game_id", "defteam"]).agg(
-        def_plays=("epa", "count"),
-        def_epa_per_play=("epa", "mean"),
-        def_success_rate_allowed=("success", "mean"),
-    ).reset_index().rename(columns={"defteam": "team"})
+    deff = (
+        plays.groupby(["game_id", "defteam"])
+        .agg(
+            def_plays=("epa", "count"),
+            def_epa_per_play=("epa", "mean"),
+            def_success_rate_allowed=("success", "mean"),
+        )
+        .reset_index()
+        .rename(columns={"defteam": "team"})
+    )
     return deff
+
 
 def build_team_game_rows(schedules: pd.DataFrame) -> pd.DataFrame:
     """One row per team per game, from the home/away perspective."""
@@ -54,9 +68,19 @@ def build_team_game_rows(schedules: pd.DataFrame) -> pd.DataFrame:
     away["opp_score"] = away["home_score"]
     away["is_home"] = 0
 
-    keep_cols = ["game_id", "season", "week", "gameday", "team", "opponent",
-                 "team_score", "opp_score", "is_home"]
+    keep_cols = [
+        "game_id",
+        "season",
+        "week",
+        "gameday",
+        "team",
+        "opponent",
+        "team_score",
+        "opp_score",
+        "is_home",
+    ]
     return pd.concat([home[keep_cols], away[keep_cols]], ignore_index=True)
+
 
 def main():
     schedules = pd.read_parquet("data/raw/schedules.parquet")
@@ -75,6 +99,7 @@ def main():
 
     print(f"Built {len(result)} team-game rows ({len(result)//2} games)")
     print(f"Saved to {out_path}")
+
 
 if __name__ == "__main__":
     main()

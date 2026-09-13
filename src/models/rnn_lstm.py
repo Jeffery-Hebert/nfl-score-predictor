@@ -8,6 +8,7 @@ this little data (same lesson as the MLP result).
 
 Run: python -m src.models.rnn_lstm
 """
+
 import numpy as np
 import pandas as pd
 import torch
@@ -18,6 +19,7 @@ from src.validate.walk_forward import walk_forward_evaluate_by_season, score_pre
 SEQ_PATH = "data/processed/team_sequences.npz"
 N_SEQ_FEATURES = 6  # matches SEQ_FEATURES in build_sequences.py
 
+
 def load_sequence_lookup():
     data = np.load(SEQ_PATH, allow_pickle=True)
     lookup = {}
@@ -25,7 +27,9 @@ def load_sequence_lookup():
         lookup[(gid, team)] = data["padded"][i]
     return lookup
 
+
 SEQ_LOOKUP = load_sequence_lookup()
+
 
 class TeamEncoder(nn.Module):
     def __init__(self, input_dim, hidden_dim=8):
@@ -35,6 +39,7 @@ class TeamEncoder(nn.Module):
     def forward(self, x):
         _, (h, _) = self.lstm(x)
         return h[-1]
+
 
 class ScorePredictor(nn.Module):
     def __init__(self, input_dim, hidden_dim=8):
@@ -51,20 +56,34 @@ class ScorePredictor(nn.Module):
         away_repr = self.encoder(away_seq)
         return self.head(torch.cat([home_repr, away_repr], dim=1))
 
+
 def _gather_sequences(df: pd.DataFrame):
     zero_seq = np.zeros((8, N_SEQ_FEATURES))
-    home_seqs = [SEQ_LOOKUP.get((r["game_id"], r["home_team"]), zero_seq) for _, r in df.iterrows()]
-    away_seqs = [SEQ_LOOKUP.get((r["game_id"], r["away_team"]), zero_seq) for _, r in df.iterrows()]
+    home_seqs = [
+        SEQ_LOOKUP.get((r["game_id"], r["home_team"]), zero_seq)
+        for _, r in df.iterrows()
+    ]
+    away_seqs = [
+        SEQ_LOOKUP.get((r["game_id"], r["away_team"]), zero_seq)
+        for _, r in df.iterrows()
+    ]
     return np.stack(home_seqs), np.stack(away_seqs)
+
 
 def fit_rnn(train: pd.DataFrame) -> dict:
     torch.manual_seed(42)
     home_seq, away_seq = _gather_sequences(train)
 
-    flat = np.concatenate([home_seq.reshape(-1, N_SEQ_FEATURES), away_seq.reshape(-1, N_SEQ_FEATURES)])
+    flat = np.concatenate(
+        [home_seq.reshape(-1, N_SEQ_FEATURES), away_seq.reshape(-1, N_SEQ_FEATURES)]
+    )
     scaler = StandardScaler().fit(flat)
-    home_scaled = scaler.transform(home_seq.reshape(-1, N_SEQ_FEATURES)).reshape(home_seq.shape)
-    away_scaled = scaler.transform(away_seq.reshape(-1, N_SEQ_FEATURES)).reshape(away_seq.shape)
+    home_scaled = scaler.transform(home_seq.reshape(-1, N_SEQ_FEATURES)).reshape(
+        home_seq.shape
+    )
+    away_scaled = scaler.transform(away_seq.reshape(-1, N_SEQ_FEATURES)).reshape(
+        away_seq.shape
+    )
 
     X_home = torch.tensor(home_scaled, dtype=torch.float32)
     X_away = torch.tensor(away_scaled, dtype=torch.float32)
@@ -79,17 +98,24 @@ def fit_rnn(train: pd.DataFrame) -> dict:
         optimizer.zero_grad()
         pred = model(X_home, X_away)
         loss = loss_fn(pred, y)
-        assert torch.isfinite(loss), f"Non-finite loss at epoch {epoch} -- stopping, do not trust this model"
+        assert torch.isfinite(
+            loss
+        ), f"Non-finite loss at epoch {epoch} -- stopping, do not trust this model"
         loss.backward()
         optimizer.step()
 
     return {"model": model, "scaler": scaler}
 
+
 def predict_rnn(model: dict, test: pd.DataFrame):
     home_seq, away_seq = _gather_sequences(test)
     scaler = model["scaler"]
-    home_scaled = scaler.transform(home_seq.reshape(-1, N_SEQ_FEATURES)).reshape(home_seq.shape)
-    away_scaled = scaler.transform(away_seq.reshape(-1, N_SEQ_FEATURES)).reshape(away_seq.shape)
+    home_scaled = scaler.transform(home_seq.reshape(-1, N_SEQ_FEATURES)).reshape(
+        home_seq.shape
+    )
+    away_scaled = scaler.transform(away_seq.reshape(-1, N_SEQ_FEATURES)).reshape(
+        away_seq.shape
+    )
 
     X_home = torch.tensor(home_scaled, dtype=torch.float32)
     X_away = torch.tensor(away_scaled, dtype=torch.float32)
@@ -99,14 +125,18 @@ def predict_rnn(model: dict, test: pd.DataFrame):
         pred = model["model"](X_home, X_away).numpy()
     return pred[:, 0], pred[:, 1]
 
+
 def main():
     df = pd.read_parquet("data/processed/model_table.parquet")
-    results = walk_forward_evaluate_by_season(df, fit_rnn, predict_rnn, min_train_seasons=2)
+    results = walk_forward_evaluate_by_season(
+        df, fit_rnn, predict_rnn, min_train_seasons=2
+    )
     metrics = score_predictions(results)
     print("RNN (LSTM) walk-forward results:")
     for k, v in metrics.items():
         print(f"  {k}: {v:.3f}" if isinstance(v, float) else f"  {k}: {v}")
     results.to_parquet("data/processed/rnn_predictions.parquet", index=False)
+
 
 if __name__ == "__main__":
     main()

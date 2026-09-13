@@ -8,13 +8,21 @@ Leakage rule: game N's sequence contains only games 1..N-1 for that team.
 Run: python src/features/build_sequences.py
 Output: data/processed/team_sequences.npz
 """
+
 import pandas as pd
 import numpy as np
 from pathlib import Path
 
 SEQ_LEN = 8
-SEQ_FEATURES = ["team_score", "opp_score", "off_epa_per_play",
-                "def_epa_per_play", "off_success_rate", "def_success_rate_allowed"]
+SEQ_FEATURES = [
+    "team_score",
+    "opp_score",
+    "off_epa_per_play",
+    "def_epa_per_play",
+    "off_success_rate",
+    "def_success_rate_allowed",
+]
+
 
 def build_team_sequences(df: pd.DataFrame) -> dict:
     df = df.sort_values("gameday").reset_index(drop=True)
@@ -24,7 +32,7 @@ def build_team_sequences(df: pd.DataFrame) -> dict:
         feats = group[SEQ_FEATURES].fillna(0).values
         for i, row in group.iterrows():
             game_id = row["game_id"]
-            history = feats[max(0, i - SEQ_LEN):i]  # strictly prior games only
+            history = feats[max(0, i - SEQ_LEN) : i]  # strictly prior games only
             n_real = len(history)
             padded = np.zeros((SEQ_LEN, len(SEQ_FEATURES)))
             if n_real > 0:
@@ -34,6 +42,7 @@ def build_team_sequences(df: pd.DataFrame) -> dict:
                 mask[-n_real:] = 1
             sequences[(game_id, team)] = (padded, mask)
     return sequences
+
 
 def main():
     df = pd.read_parquet("data/processed/team_game_stats.parquet")
@@ -50,6 +59,7 @@ def main():
     np.savez(out_path, game_ids=game_ids, teams=teams, padded=padded, masks=masks)
     print(f"Built sequences for {len(keys)} team-game entries")
     print(f"Saved to {out_path}")
+
 
 if __name__ == "__main__":
     main()
