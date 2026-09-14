@@ -20,6 +20,12 @@ STAT_COLS = [
     "def_epa_per_play",
     "off_success_rate",
     "def_success_rate_allowed",
+    "off_pass_epa_per_play",
+    "off_rush_epa_per_play",
+    "off_cpoe",
+    "def_pass_epa_per_play_allowed",
+    "def_rush_epa_per_play_allowed",
+    "def_cpoe_allowed",
 ]
 
 

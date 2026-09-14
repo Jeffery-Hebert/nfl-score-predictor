@@ -75,7 +75,8 @@ def analyze(preds_path: str, label: str):
 
 
 if __name__ == "__main__":
-    analyze("data/processed/poisson_predictions.parquet", "Poisson GLM")
-    analyze("data/processed/gp_predictions.parquet", "Gaussian Process")
+    # analyze("data/processed/poisson_predictions.parquet", "Poisson GLM")
+    # analyze("data/processed/gp_predictions.parquet", "Gaussian Process")
     analyze("data/processed/linear_predictions.parquet", "Linear Regression")
     analyze("data/processed/stacking_predictions.parquet", "Stacking Meta-Model")
+    analyze("data/processed/rf_extended_predictions.parquet", "**New RF**")
