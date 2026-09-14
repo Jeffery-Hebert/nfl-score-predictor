@@ -28,22 +28,27 @@ def load_config():
         return yaml.safe_load(f)
 
 
+def is_finale_week(season: int, week: int) -> bool:
+    """Regular-season finale: week 17 for 2019-2020 (16-game era), week 18 for 2021+ (17-game era)."""
+    return week == (17 if season in (2019, 2020) else 18)
+
+
 def add_pregame_rolling_features(
     group: pd.DataFrame, halflife_days: float
 ) -> pd.DataFrame:
     group = group.sort_values("gameday").reset_index(drop=True)
+    finale_mask = group.apply(lambda r: is_finale_week(r["season"], r["week"]), axis=1)
+
     for col in STAT_COLS:
-        ewm = (
-            group[col]
-            .ewm(halflife=pd.Timedelta(days=halflife_days), times=group["gameday"])
-            .mean()
-        )
-        # Shift by 1: game N's feature = EWM computed through game N-1 only
+        masked_series = group[col].where(~finale_mask)  # finale-week values become NaN
+        ewm = masked_series.ewm(
+            halflife=pd.Timedelta(days=halflife_days),
+            times=group["gameday"],
+            ignore_na=True,
+        ).mean()
         group[f"pregame_{col}"] = ewm.shift(1)
     group["rest_days"] = group["gameday"].diff().dt.days
-    group["prior_games_played"] = range(
-        len(group)
-    )  # 0 for first game, 1 for second, etc.
+    group["prior_games_played"] = range(len(group))
     return group
 
 

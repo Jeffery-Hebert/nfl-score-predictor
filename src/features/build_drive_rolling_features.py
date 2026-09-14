@@ -40,16 +40,24 @@ def load_config():
         return yaml.safe_load(f)
 
 
+def is_finale_week(season: int, week: int) -> bool:
+    """Regular-season finale: week 17 for 2019-2020 (16-game era), week 18 for 2021+ (17-game era)."""
+    return week == (17 if season in (2019, 2020) else 18)
+
+
 def add_pregame_rolling_drive_features(
     group: pd.DataFrame, halflife_days: float
 ) -> pd.DataFrame:
     group = group.sort_values("gameday").reset_index(drop=True)
+    finale_mask = group.apply(lambda r: is_finale_week(r["season"], r["week"]), axis=1)
+
     for col in DRIVE_STAT_COLS:
-        ewm = (
-            group[col]
-            .ewm(halflife=pd.Timedelta(days=halflife_days), times=group["gameday"])
-            .mean()
-        )
+        masked_series = group[col].where(~finale_mask)
+        ewm = masked_series.ewm(
+            halflife=pd.Timedelta(days=halflife_days),
+            times=group["gameday"],
+            ignore_na=True,
+        ).mean()
         group[f"pregame_{col}"] = ewm.shift(1)
     return group
 

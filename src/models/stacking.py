@@ -1,16 +1,17 @@
 """
 Stacking meta-model: ridge regression trained on out-of-fold predictions
-from all 10 base models. This is the 11th and final prediction.
+from the three models that actually demonstrated real out-of-sample value
+(Linear, Poisson, GP) -- the other 7 base models are retained in
+src/models/unused/ for research/diagnostic purposes but excluded here
+since they showed no measurable improvement over these three.
 
-Note: base models were evaluated at two different retraining cadences
-(weekly for most, season-level for GP/Bayesian/RNN, for compute reasons).
-All target the same 1,426 test games, so merging is valid, but the
-season-level models' inputs are "staler" than the weekly ones -- a known
-asymmetry, not hidden.
+All three inputs share the same weekly retraining cadence, so there's no
+cross-model staleness asymmetry to account for (unlike the earlier version
+of this file, which mixed weekly and season-level base models).
 
-Uses its own walk-forward split (with lighter burn-in, since the input
-data is already the reduced 2021-2025 test set) to avoid the meta-model
-overfitting to the base predictions it's stacking.
+Uses its own walk-forward split (lighter burn-in, since the input data is
+already the reduced 2021-2025 test set) to avoid the meta-model overfitting
+to the base predictions it's stacking.
 
 Run: python -m src.models.stacking
 """
@@ -20,21 +21,7 @@ from sklearn.linear_model import Ridge
 from sklearn.preprocessing import StandardScaler
 from src.validate.walk_forward import walk_forward_evaluate, score_predictions
 
-BASE_MODELS = [
-    "baseline",
-    "linear",
-    "poisson",
-    "rf",
-    "xgb",
-    "lgbm",
-    "catboost",
-    "logistic",
-    "mlp",
-    "gp",
-    "bayesian",
-    "rnn",
-    "montecarlo",
-]
+BASE_MODELS = ["linear", "poisson", "gp"]
 
 
 def load_meta_table() -> pd.DataFrame:
