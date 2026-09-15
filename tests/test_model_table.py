@@ -7,6 +7,10 @@ import pandas as pd
 import pytest
 from pathlib import Path
 
+# Reads built parquet from data/, which is gitignored -- excluded from CI.
+# Run locally after building the pipeline; see the marker note in pyproject.toml.
+pytestmark = pytest.mark.requires_data
+
 DATA_PATH = Path("data/processed/model_table.parquet")
 
 

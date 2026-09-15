@@ -1,0 +1,43 @@
+# Runs the leakage gates on every push and PR.
+#
+# Why this exists: all six leakage tests were broken from commit 2dc3f67 and
+# stayed red across five commits without anyone noticing, because nothing ever
+# ran them outside a local terminal. Those tests are the project's primary
+# defense against temporal leakage -- they need to run automatically.
+#
+# Scope: only tests NOT marked `requires_data`. The data/ directory is
+# gitignored, so schema/table tests that read built parquet cannot run here.
+# Run those locally after building the pipeline:
+#     pytest tests/ -m requires_data -v
+#
+# torch is deliberately not installed here -- no test imports it, and the
+# CPU-wheel index URL breaks the install (see the note in requirements.txt).
+
+name: tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      # Also verifies requirements.txt is actually installable.
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Leakage gates and unit tests
+        run: pytest tests/ -m "not requires_data" -v
+
+      - name: Formatting (black is this project's standard)
+        run: black --check .

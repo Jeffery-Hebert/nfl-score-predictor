@@ -1,2 +1,5 @@
 [tool.pytest.ini_options]
 pythonpath = ["."]
+markers = [
+    "requires_data: test reads built parquet files under data/ (which is gitignored). Excluded in CI via `-m 'not requires_data'`; run locally after building the pipeline.",
+]
