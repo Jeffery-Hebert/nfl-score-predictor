@@ -76,6 +76,74 @@ stacking.py from 13 to 3 base models has not been directly reviewed" is now
 partly moot -- the question is no longer which 3, but whether the stack should
 exist at all.
 
+## Active Accuracy Baseline (2026-09-14)
+
+Every model re-run on the clean A3 rebuild, identical features, one raw
+snapshot. Reproduce with `python -m src.validate.model_scoreboard --against baseline`.
+Gaussian Process was run separately (26 min); everything else is under 4 minutes.
+
+**Measured runtimes** (operator's 8-core machine, weekly walk-forward, 111 folds):
+
+| model | runtime | | model | runtime |
+|---|---|---|---|---|
+| baseline | ~1s | | catboost | 27s |
+| logistic | 9s | | rnn_lstm | 25s (season-level) |
+| lightgbm | 12s | | bayesian_hier | 115s (season-level, ADVI) |
+| linear | 7s | | mlp | 207s |
+| montecarlo | 10s | | random_forest | 214s |
+| poisson | 22s | | **gaussian_process** | **1573s (26 min)** |
+| xgboost | 25s | | | |
+
+Feature rebuild is 51s for all 9 stages. GP alone costs more than every other
+model combined, by roughly 3x.
+
+**Full set, n=1426 (2021-2026).** margin/total are the betting-relevant
+metrics; slope is calibration (1.0 = perfect, >1 = compressed toward the mean).
+
+| model | home | away | mean | margin | total | h_bias | slope | vs baseline (bootstrap) |
+|---|---|---|---|---|---|---|---|---|
+| poisson | 9.523 | 9.238 | 9.380 | 13.129 | 13.404 | +0.41 | 1.128 | **BETTER** [-0.117, -0.006] |
+| gp | 9.516 | 9.250 | 9.383 | 13.140 | 13.400 | +0.09 | 1.051 | **BETTER** [-0.120, -0.000] |
+| linear | 9.543 | 9.240 | 9.391 | 13.136 | 13.429 | +0.29 | 1.028 | noise |
+| catboost | 9.555 | 9.302 | 9.429 | 13.238 | 13.432 | +0.03 | 1.152 | noise |
+| rf | 9.560 | 9.303 | 9.432 | 13.234 | 13.444 | -0.03 | 0.888 | noise |
+| **baseline** | 9.597 | 9.286 | 9.442 | 13.258 | 13.450 | -0.47 | 1.226 | -- |
+| xgb | 9.593 | 9.315 | 9.454 | 13.264 | 13.477 | +0.00 | 0.897 | noise |
+| lgbm | 9.571 | 9.346 | 9.459 | 13.277 | 13.477 | -0.02 | 0.927 | noise |
+| logistic | 9.706 | 9.389 | 9.548 | 13.255 | 13.749 | +0.20 | 1.517 | **WORSE** |
+| bayesian | 9.784 | 9.370 | 9.577 | 13.216 | 13.870 | -1.97 | 1.526 | **WORSE** |
+| montecarlo | 9.804 | 9.377 | 9.590 | 13.660 | 13.472 | -1.31 | 0.992 | **WORSE** |
+| rnn | 10.021 | 9.719 | 9.870 | 14.215 | 13.700 | +0.12 | 1.722 | **WORSE** |
+| mlp | 10.087 | 9.701 | 9.894 | 13.445 | 14.523 | +1.95 | 0.581 | **WORSE** |
+
+**Conclusions.**
+
+1. Only Poisson and GP clear the promotion gate, and GP's CI upper bound is
+   -0.0004 -- it barely clears, for 70x Poisson's runtime. Poisson GLM is the
+   defensible production choice.
+2. Five models are *significantly worse* than a no-ML rule-based blend:
+   logistic, bayesian, montecarlo, rnn, mlp. Retaining them in
+   `src/models/unused/` is correct; promoting any of them would be a
+   regression, and this is now measured rather than assumed.
+3. The GBM trio (rf/xgb/lgbm/catboost) sits indistinguishable from baseline.
+   Consistent with the original decision to exclude them.
+4. **Calibration finds things RMSE cannot.** Bayesian carries a -1.97 home bias
+   and MLP a +1.95 bias, both invisible in a ranking by RMSE. MLP's slope of
+   0.581 means wildly over-dispersed predictions; RNN's 1.722 means heavily
+   compressed. Crucially the rule-based **baseline itself is compressed
+   (slope 1.226)** -- so a model can match it on RMSE while being far more
+   useful for derived spreads.
+5. **Nuance on the A5 "retire the stack" recommendation.** On the common
+   1141-game set Poisson still leads on accuracy (margin 12.921 vs stacking
+   12.953), so the accuracy conclusion stands. But stacking has the best
+   calibration slope of any model (0.986 vs Poisson's 1.152). If the stack is
+   kept, calibration -- not accuracy -- is the defensible reason, and that
+   argument should be made explicitly rather than assumed.
+
+**Caveat:** on the 1141-game common set nothing clears the gate, including
+Poisson. The significant results above depend on the full 1426-game set. These
+effects are near the resolution limit of the available data.
+
 ## Real, Unresolved Gaps (Worth Pursuing With New Data or New Direction, Not New Cuts of Old Data)
 
 - **No injury/inactive/depth-chart data source.** This is the single most-cited real gap across every session — the model has no visibility into who is actually playing, which is the dominant driver of the QB-identity and finale-week findings above. Solving this requires a new data source, not new feature engineering on existing play-by-play.
