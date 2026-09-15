@@ -26,10 +26,17 @@ implies, so the two can be read on the same scale:
 nflverse ships the CLOSING line, so a Wednesday prediction is being shown
 against a number that will keep moving until kickoff.
 
+Rounding. Every predicted score is rounded to one decimal place before it is
+stored or displayed. A tenth of a point is already far finer than the model can
+actually resolve -- typical error is over nine points -- so the extra digits
+were noise dressed as precision.
+
 Run: python -m src.predict.predict_week                 # next unplayed week
      python -m src.predict.predict_week --season 2026 --week 2
+     python -m src.predict.predict_week --week 2 --html   # open in any browser
      python -m src.predict.predict_week --week 2 --json out.json
-Output: data/predictions/<season>_wk<week>.parquet (+ .json when asked)
+Output: data/predictions/<season>_wk<week>.parquet
+        data/predictions/<season>_wk<week>.html   (with --html)
 """
 
 import argparse
@@ -38,6 +45,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from src.models.baseline import fit_baseline, predict_baseline
@@ -46,6 +54,11 @@ from src.models.linear import fit_linear, predict_linear
 from src.models.poisson_glm import fit_poisson, predict_poisson
 
 MODEL_TABLE = Path("data/processed/model_table.parquet")
+TEMPLATE = Path(__file__).with_name("report_template.html")
+
+# One decimal place. Typical error is over nine points, so anything finer is
+# noise wearing the costume of precision.
+DP = 1
 OUT_DIR = Path("data/predictions")
 
 # Everything but the stack, which is built from these.
@@ -110,9 +123,61 @@ def market_reference(game_ids) -> pd.DataFrame:
         ["game_id", "gametime", "spread_line", "total_line"]
     ].copy()
     # spread_line is the home margin the market expects (positive = home favoured)
-    s["market_home"] = (s["total_line"] + s["spread_line"]) / 2
-    s["market_away"] = (s["total_line"] - s["spread_line"]) / 2
+    s["market_home"] = ((s["total_line"] + s["spread_line"]) / 2).round(1)
+    s["market_away"] = ((s["total_line"] - s["spread_line"]) / 2).round(1)
     return s
+
+
+def to_records(out: pd.DataFrame) -> dict:
+    """The shape the report template expects."""
+    games = []
+    for _, r in out.iterrows():
+        g = {
+            "away": r["away_team"],
+            "home": r["home_team"],
+            "kickoff": str(pd.Timestamp(r["gameday"]).date()),
+            "models": {},
+        }
+        for m in ["combined", "linear", "poisson", "gp"]:
+            if f"{m}_home" not in out.columns or pd.isna(r[f"{m}_home"]):
+                continue
+            g["models"][m] = {
+                "away": round(float(r[f"{m}_away"]), DP),
+                "home": round(float(r[f"{m}_home"]), DP),
+                "margin": round(float(r[f"{m}_margin"]), DP),
+                "total": round(float(r[f"{m}_total"]), DP),
+            }
+        g["market"] = (
+            {
+                "spread": float(r["spread_line"]),
+                "total": float(r["total_line"]),
+                "away": round(float(r["market_away"]), DP),
+                "home": round(float(r["market_home"]), DP),
+            }
+            if pd.notna(r.get("spread_line"))
+            else None
+        )
+        games.append(g)
+    return {
+        "meta": {
+            "season": int(out["season"].iloc[0]),
+            "week": int(out["week"].iloc[0]),
+            "trained_through": str(out["trained_through"].iloc[0]),
+            "n_training_games": int(out["n_training_games"].iloc[0]),
+            "generated_at": str(out["generated_at"].iloc[0]),
+        },
+        "games": games,
+    }
+
+
+def write_html(out: pd.DataFrame, path: Path) -> None:
+    """A single self-contained file. Open it in any browser -- no server, no
+    build step, no network except the Google Fonts stylesheet (which degrades
+    to system fonts offline)."""
+    if not TEMPLATE.exists():
+        sys.exit(f"ERROR: {TEMPLATE} is missing.")
+    payload = json.dumps(to_records(out), separators=(",", ":"))
+    path.write_text(TEMPLATE.read_text().replace("__DATA__", payload))
 
 
 def main():
@@ -120,6 +185,11 @@ def main():
     ap.add_argument("--season", type=int, default=None)
     ap.add_argument("--week", type=int, default=None)
     ap.add_argument("--json", type=str, default=None, help="also write JSON here")
+    ap.add_argument(
+        "--html",
+        action="store_true",
+        help="also write a standalone page you can open in a browser",
+    )
     ap.add_argument(
         "--skip-gp",
         action="store_true",
@@ -158,18 +228,24 @@ def main():
         print(f"  fitting {name}...", flush=True)
         model = fit_fn(train)
         h, a = predict_fn(model, target)
-        out[f"{name}_home"] = h
-        out[f"{name}_away"] = a
+        out[f"{name}_home"] = np.round(h, DP)
+        out[f"{name}_away"] = np.round(a, DP)
 
     members = [m for m in STACK_MEMBERS if f"{m}_home" in out.columns]
     if members:
-        out["combined_home"] = out[[f"{m}_home" for m in members]].mean(axis=1)
-        out["combined_away"] = out[[f"{m}_away" for m in members]].mean(axis=1)
+        out["combined_home"] = (
+            out[[f"{m}_home" for m in members]].mean(axis=1).round(DP)
+        )
+        out["combined_away"] = (
+            out[[f"{m}_away" for m in members]].mean(axis=1).round(DP)
+        )
 
     for name in list(MODELS) + ["combined"]:
         if f"{name}_home" in out.columns:
-            out[f"{name}_margin"] = out[f"{name}_home"] - out[f"{name}_away"]
-            out[f"{name}_total"] = out[f"{name}_home"] + out[f"{name}_away"]
+            out[f"{name}_margin"] = (out[f"{name}_home"] - out[f"{name}_away"]).round(
+                DP
+            )
+            out[f"{name}_total"] = (out[f"{name}_home"] + out[f"{name}_away"]).round(DP)
 
     out = out.merge(market_reference(out["game_id"]), on="game_id", how="left")
     out["generated_at"] = datetime.now(timezone.utc).isoformat()
@@ -190,13 +266,13 @@ def main():
         def pair(pre):
             hk, ak = f"{pre}_home", f"{pre}_away"
             if hk not in r or pd.isna(r[hk]):
-                return f"{'--':>12}"
-            return f"{r[ak]:.0f}-{r[hk]:.0f}".rjust(12)
+                return f"{'--':>13}"
+            return f"{r[ak]:.1f}-{r[hk]:.1f}".rjust(13)
 
         mk = (
-            f"{r['market_away']:.0f}-{r['market_home']:.0f}".rjust(12)
+            f"{r['market_away']:.1f}-{r['market_home']:.1f}".rjust(13)
             if pd.notna(r.get("market_home"))
-            else f"{'no line':>12}"
+            else f"{'no line':>13}"
         )
         print(
             f"{match:<22}{pair('combined')}{pair('linear')}{pair('poisson')}"
@@ -206,6 +282,13 @@ def main():
     print(f"\nScores shown as away-home. Market column is the CLOSING line's implied")
     print(f"score and is reference only -- it is never a model input.")
     print(f"Saved to {path}")
+
+    if args.html:
+        html_path = OUT_DIR / f"{season}_wk{week:02d}.html"
+        write_html(out, html_path)
+        print(f"\nPage written to {html_path}")
+        print(f"  open it with:  xdg-open {html_path}")
+        print(f"  or in Firefox: firefox {html_path}")
 
     if args.json:
         Path(args.json).write_text(

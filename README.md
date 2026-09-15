@@ -245,16 +245,61 @@ pytest tests/ -v
 **Step 4 — train and score a model:**
 
 ```bash
-python -m src.models.baseline      # the no-ML benchmark, ~1 second
-python -m src.models.linear        # ~30 seconds
-python -m src.models.poisson_glm   # ~50 seconds, currently the best
+python -m src.models.baseline           # the no-ML benchmark, ~3 seconds
+python -m src.models.linear             # ~2.5 minutes
+python -m src.models.poisson_glm        # ~1 minute
+python -m src.models.gaussian_process   # ~30 minutes, currently the best
+python -m src.models.stacking           # ~1 minute, needs the three above
 ```
 
 **Compare everything at once:**
 
 ```bash
-python -m src.validate.model_scoreboard --against baseline
+python -m src.validate.model_scoreboard --against baseline --common-games
 ```
+
+---
+
+## 5b. Predicting games that haven't been played
+
+Everything above scores the past. This predicts the future.
+
+```bash
+python -m src.predict.predict_week --html
+```
+
+That fits every model on all completed games, predicts the next unplayed week,
+prints a table, and writes two files:
+
+```
+data/predictions/2026_wk02.parquet   the numbers, for further analysis
+data/predictions/2026_wk02.html      a page you can open in any browser
+```
+
+**To view it**, just open the HTML file — no server, no build step, no internet
+needed beyond the web fonts (it falls back to system fonts offline):
+
+```bash
+firefox data/predictions/2026_wk02.html
+```
+
+or `xdg-open` on Linux, `open` on macOS, or double-click it in a file manager.
+The page is one self-contained file: the predictions are baked into it, so you
+can email it, copy it to a phone, or keep it as a record of what the model said
+before the games were played.
+
+Pick a specific week with `--season 2026 --week 2`. Add `--json out.json` if you
+want the raw numbers somewhere else.
+
+**It will refuse to run on stale data.** If the newest completed game is more
+than three weeks before kickoff, it stops and tells you which commands to run
+— predicting Week 2 from a table that never received Week 1 produces confident,
+wrong numbers and no error message, so the script treats that as a failure
+rather than a warning.
+
+All predicted scores are rounded to one decimal place. The models' typical
+error is over nine points, so anything finer would be noise dressed as
+precision.
 
 Note: scripts that import from other project files must be run with `-m` from
 the repo root (`python -m src.models.linear`), not as a file path.
