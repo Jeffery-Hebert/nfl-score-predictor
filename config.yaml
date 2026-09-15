@@ -1,3 +1,9 @@
+# Only ONE key in this file is read by code:
+#   training.recency_half_life_weeks  (src/features/build_*_rolling_features.py,
+#                                      src/features/build_adjusted_ratings.py)
+# Everything else is documentation of the system's current shape. Changing it
+# does not change behavior -- update the referenced source file instead.
+
 project:
   name: nfl-score-predictor
   target: final_score_pair   # home_score, away_score
@@ -5,27 +11,42 @@ project:
 data:
   source: nflreadpy
   season_start: 2019
-  season_end: 2026            # current season, updated automatically each week
+  season_end: 2026
+  # NOTE: not updated automatically. Hardcoded as SEASON_START/SEASON_END in
+  # src/ingest/pull_pbp.py and src/ingest/pull_schedules.py -- edit both by hand.
 
 training:
+  recency_half_life_weeks: 17  # ~1 season. READ BY CODE. Not yet tuned empirically.
+  # Retrain cadence below is documentation only; the real schedule is the cron
+  # in .github/workflows/weekly.yml.
   retrain_day: wednesday
   retrain_time_local: "17:00"
   timezone: America/Chicago
-  recency_half_life_weeks: 17  # ~1 season; will be tuned empirically on Day 3
 
+# Models currently evaluated and feeding the stack.
 models:
-  - linear_regression
-  - logistic_regression
-  - poisson_glm
+  - linear_regression      # src/models/linear.py
+  - poisson_glm            # src/models/poisson_glm.py
+  - gaussian_process       # src/models/gaussian_process.py
+
+# Rule-based reference every model above must beat out-of-sample to be trusted.
+baseline: src/models/baseline.py   # also contains the trivial league-average floor
+
+# Built, evaluated, and shelved for showing no measurable out-of-sample gain.
+# Retained in src/models/unused/ for research/diagnostics, not part of the stack.
+shelved_models:
   - random_forest
   - xgboost
   - lightgbm
   - catboost
+  - logistic
   - mlp
-  - gaussian_process
   - bayesian_hierarchical
-  - monte_carlo_simulation
+  - rnn_lstm
+  - monte_carlo
 
 meta_model:
-  type: ridge_stacker
-  validation: walk_forward_out_of_fold
+  # src/models/stacking.py
+  type: ridge_stacker              # Ridge(alpha=1.0) on StandardScaler'd base predictions
+  base_models: [linear, poisson, gp]   # must match BASE_MODELS in stacking.py
+  validation: walk_forward         # walk_forward_evaluate(min_train_seasons=1)

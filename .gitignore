@@ -5,3 +5,4 @@ __pycache__/
 *.pyc
 .pytensor/catboost_info/
 catboost_info/
+.pytest_cache/
