@@ -3,31 +3,33 @@ Leakage-safety tests for pregame rolling features.
 Uses a hand-built synthetic team history where the correct answer is known
 in advance -- this is the actual leakage gate, not a sanity check on real data.
 
+The fixture is built via tests/conftest.py::make_team_history so that adding a
+column to STAT_COLS cannot silently disable these tests (see that file's
+docstring -- it has happened twice).
+
 Run: pytest tests/test_rolling_features_leakage.py -v
 """
 
 import pandas as pd
 import pytest
+
 from src.features.build_rolling_features import add_pregame_rolling_features
+from tests.conftest import make_team_history
 
 
 @pytest.fixture
 def synthetic_team():
-    """One fake team, 4 games, weekly spacing, simple team_score sequence."""
-    return pd.DataFrame(
-        {
-            "game_id": ["g1", "g2", "g3", "g4"],
-            "team": ["FAKE"] * 4,
-            "gameday": pd.to_datetime(
-                ["2024-09-01", "2024-09-08", "2024-09-15", "2024-09-22"]
-            ),
-            "team_score": [10, 20, 30, 40],
-            "opp_score": [7, 14, 21, 28],
-            "off_epa_per_play": [0.1, 0.2, 0.3, 0.4],
-            "def_epa_per_play": [-0.1, -0.2, -0.3, -0.4],
-            "off_success_rate": [0.4, 0.5, 0.6, 0.7],
-            "def_success_rate_allowed": [0.4, 0.45, 0.5, 0.55],
-        }
+    """One fake team, 4 games, weekly spacing, simple team_score sequence.
+
+    Weeks 1-4 of 2024 are all non-finale, so finale masking is inactive here
+    and these tests isolate the EWM + shift(1) leakage behavior on its own.
+    Only team_score is asserted on; other stat columns are placeholders.
+    """
+    return make_team_history(
+        gamedays=["2024-09-01", "2024-09-08", "2024-09-15", "2024-09-22"],
+        seasons=[2024, 2024, 2024, 2024],
+        weeks=[1, 2, 3, 4],
+        team_score=[10, 20, 30, 40],
     )
 
 
