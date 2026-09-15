@@ -21,11 +21,8 @@ Output: data/processed/drive_stats.parquet
 import pandas as pd
 from pathlib import Path
 
-# Points to the team with the ball.
 # Points to the team with the ball on that drive.
 POINTS_MAP = {"Touchdown": 7, "Field goal": 3}
-# Points to the DEFENDING team on that drive -- return TDs and safeties.
-DEFENSE_POINTS_MAP = {"Opp touchdown": 7, "Safety": 2}
 # Points to the DEFENDING team on that drive -- return TDs and safeties.
 DEFENSE_POINTS_MAP = {"Opp touchdown": 7, "Safety": 2}
 OUTCOME_CATS = [
@@ -108,15 +105,6 @@ def main():
     # Full estimated points: offensive scoring plus the team's own defensive
     # scoring. points_scored stays offense-only so drive-RATE features are
     # unchanged; est_points_for is the corrected total.
-    result["est_points_for"] = result["points_scored"].fillna(0) + result[
-        "def_points_scored"
-    ].fillna(0)
-    result["est_points_against"] = result["points_allowed"].fillna(0) + result[
-        "points_given_up"
-    ].fillna(0)
-
-    # Full estimated points, offense plus defensive scoring. points_scored stays
-    # offense-only so the drive-rate features downstream are untouched.
     result["est_points_for"] = result["points_scored"].fillna(0) + result[
         "def_points_scored"
     ].fillna(0)
