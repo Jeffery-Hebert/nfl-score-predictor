@@ -67,7 +67,13 @@ def main():
     halflife_days = cfg["training"]["recency_half_life_weeks"] * 7
 
     drive_stats = pd.read_parquet("data/processed/drive_stats.parquet")
-    schedules = pd.read_parquet("data/raw/schedules.parquet")[["game_id", "gameday"]]
+    # season/week are required by is_finale_week() in
+    # add_pregame_rolling_drive_features -- drive_stats.parquet carries neither,
+    # so they must come from schedules. Omitting them made this stage crash on
+    # every run from commit 2dc3f67 until it was caught by build_all.py.
+    schedules = pd.read_parquet("data/raw/schedules.parquet")[
+        ["game_id", "season", "week", "gameday"]
+    ]
     schedules["gameday"] = pd.to_datetime(schedules["gameday"])
 
     df = drive_stats.merge(schedules, on="game_id", how="inner")

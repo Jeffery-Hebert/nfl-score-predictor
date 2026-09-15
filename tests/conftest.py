@@ -58,3 +58,34 @@ def make_team_history(gamedays, seasons, weeks, team="FAKE", **asserted_stats):
     for col in STAT_COLS:
         df[col] = asserted_stats.get(col, [0.1 * (i + 1) for i in range(n)])
     return df
+
+
+def make_drive_history(gamedays, seasons, weeks, team="FAKE", **asserted_stats):
+    """One fake team's drive-rate history, for the drive-level leakage gate.
+
+    Same contract as make_team_history but built from DRIVE_STAT_COLS, and it
+    includes the season/week columns that add_pregame_rolling_drive_features
+    needs for finale masking -- whose absence from the real pipeline made that
+    stage crash on every run between commits 2dc3f67 and its repair.
+    """
+    from src.features.build_drive_rolling_features import DRIVE_STAT_COLS
+
+    n = len(gamedays)
+    for name, values in asserted_stats.items():
+        if name not in DRIVE_STAT_COLS:
+            raise ValueError(f"{name!r} is not in DRIVE_STAT_COLS")
+        if len(values) != n:
+            raise ValueError(f"{name!r} has {len(values)} values, expected {n}")
+
+    df = pd.DataFrame(
+        {
+            "game_id": [f"g{i + 1}" for i in range(n)],
+            "team": [team] * n,
+            "season": seasons,
+            "week": weeks,
+            "gameday": pd.to_datetime(gamedays),
+        }
+    )
+    for col in DRIVE_STAT_COLS:
+        df[col] = asserted_stats.get(col, [0.1 * (i + 1) for i in range(n)])
+    return df
