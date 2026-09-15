@@ -28,6 +28,54 @@ All of the following were built, leakage-tested, and evaluated via standalone fa
 
 **Aggregate conclusion from this line of investigation:** five distinct, well-motivated feature ideas, tested across four model architectures with proper leakage safety and statistical rigor, produced zero confirmed improvements and one confirmed (small) regression. This suggests granular decomposition/adjustment of the *existing* box-score/EPA data has limited remaining headroom for these model classes — not that football context doesn't matter, but that these specific cuts of already-available information don't clear the bar. Before retrying variations in this family, have a specific, new reason to expect a different result.
 
+## A5 Finding (2026-09-14): The Stack Does Not Earn Its Place
+
+Measured on a clean full-pipeline rebuild, all models re-run on identical
+features. Reproduce with `python -m src.experiments.test_stack_vs_base_models`.
+Paired bootstrap, 10,000 resamples, resampling **games** (so a resampled game
+contributes both its home and away error; within-game error correlation is
+0.02). Pooled home+away RMSE.
+
+**Promotion gate -- does each model beat `baseline.py`?** (n=1426, 2021-2026)
+
+| model | delta vs baseline | 95% CI | verdict |
+|---|---|---|---|
+| poisson | -0.0613 | [-0.1179, -0.0037] | **beats baseline (real)** |
+| gp | -0.0593 | [-0.1197, -0.0001] | beats baseline, but the CI upper bound is essentially touching zero |
+| linear | -0.0504 | [-0.1189, +0.0175] | **not distinguishable from noise** |
+
+**Does the stack beat its own base models?** (n=1141, stacking's own window)
+
+Ranked pooled RMSE: poisson 9.2748 < gp 9.2819 < **stacking 9.2975** < linear
+9.2977 < baseline 9.3285.
+
+| comparison | delta | 95% CI | verdict |
+|---|---|---|---|
+| stacking vs poisson | +0.0230 | [-0.0115, +0.0586] | noise, but P(stacking better) = only 10.2% |
+| stacking vs baseline | -0.0303 | [-0.0993, +0.0398] | **not distinguishable from noise** |
+
+**Conclusion:** Poisson GLM alone clears the project's promotion gate. The
+three-model Ridge stack does not -- it cannot be distinguished from the
+rule-based baseline, while its own best input can. Stacking is not adding
+signal here; it is averaging away the signal Poisson has. Linear does not clear
+the gate either, and GP clears it only marginally while costing ~26 minutes per
+walk-forward pass (14.18s/fold x 111 folds) versus Poisson's ~10s.
+
+**Recommendation (not yet actioned -- architectural change, needs operator
+sign-off):** ship Poisson GLM as the production model and retire the stack, or
+at minimum drop Linear and GP from `BASE_MODELS`. This would cut a full
+prediction run from ~27 minutes to seconds. Counter-argument worth weighing
+before acting: a stack is more robust to one base model degrading over time,
+and this is a single 1141-game sample. If the stack is kept, it should be
+re-tested with base models that are genuinely decorrelated -- Linear, Poisson
+and GP on identical features are near-duplicates of each other, which is the
+likely mechanism for the stack's failure to add anything.
+
+**Also settled here:** the long-open gap "the original evidence for reducing
+stacking.py from 13 to 3 base models has not been directly reviewed" is now
+partly moot -- the question is no longer which 3, but whether the stack should
+exist at all.
+
 ## Real, Unresolved Gaps (Worth Pursuing With New Data or New Direction, Not New Cuts of Old Data)
 
 - **No injury/inactive/depth-chart data source.** This is the single most-cited real gap across every session — the model has no visibility into who is actually playing, which is the dominant driver of the QB-identity and finale-week findings above. Solving this requires a new data source, not new feature engineering on existing play-by-play.
