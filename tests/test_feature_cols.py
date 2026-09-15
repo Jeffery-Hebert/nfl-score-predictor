@@ -11,13 +11,20 @@ Run: pytest tests/test_feature_cols.py -v
 
 import pytest
 
-from src.models.common import BASE_FEATURE_COLS, FEATURE_COLS, GAME_FEATURE_COLS
+from src.models.common import (
+    BASE_FEATURE_COLS,
+    FEATURE_COLS,
+    GAME_FEATURE_COLS,
+    INJURY_FEATURE_COLS,
+)
 
 
 def test_feature_cols_is_base_prefixed_home_then_away_plus_game_level():
     expected = (
         [f"home_{c}" for c in BASE_FEATURE_COLS]
         + [f"away_{c}" for c in BASE_FEATURE_COLS]
+        + [f"home_{c}" for c in INJURY_FEATURE_COLS]
+        + [f"away_{c}" for c in INJURY_FEATURE_COLS]
         + GAME_FEATURE_COLS
     )
     assert FEATURE_COLS == expected
@@ -70,11 +77,16 @@ def test_every_feature_is_pregame_or_a_known_non_stat(col):
     # rest_days and prior_games_played come from the schedule, not from play
     # data; is_neutral_site/is_playoff are fixture context. All four are known
     # before kickoff.
+    # All known before kickoff: rest_days and prior_games_played come from the
+    # schedule, is_neutral_site/is_playoff are fixture context, and
+    # injury_impact comes from the official injury report, which publishes a
+    # median 49 hours before kickoff (see build_injury_features.py).
     allowed_non_pregame = {
         "rest_days",
         "prior_games_played",
         "is_neutral_site",
         "is_playoff",
+        *INJURY_FEATURE_COLS,
     }
     assert (
         stripped.startswith("pregame_") or stripped in allowed_non_pregame

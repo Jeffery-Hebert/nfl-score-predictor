@@ -1,14 +1,404 @@
 # nfl-score-predictor
 
-From-scratch NFL final-score prediction system. See config.yaml for model
-list and training schedule. Predictions are generated weekly (Wed 5pm CT)
-via GitHub Actions and committed to /data/predictions.
+A from-scratch system that tries to predict the final score of NFL games —
+for example, guessing "Chiefs 27, Bills 24" before the game is played.
 
+This README assumes **no machine learning experience and no deep football
+knowledge**. Everything is defined as it comes up. If you know SQL or dbt,
+look for the **`For dbt/SQL folks`** boxes — they map each idea onto something
+you already use.
 
+---
 
+## 1. What problem is this solving?
 
-## Running scripts
-Scripts that import from other src/ modules must be run with -m from the
-repo root, e.g.: python -m src.models.baseline
-Standalone ingestion/feature scripts can still be run directly, e.g.:
+Given two teams and a date, predict how many points each will score.
+
+That's it. Every other question people care about — who wins, what the point
+difference is, whether the total lands over or under a number — can be derived
+from a predicted score pair. That's why the score is the target rather than
+just "who wins."
+
+### How good is it, honestly?
+
+The headline number is **RMSE** (root mean squared error). Think of it as
+"typically how many points off are we, with big misses punished extra."
+
+Current accuracy, measured across 1,426 real games from 2021–2026:
+
+| What | Typical error per team's score |
+|---|---|
+| Always guess the league average | ~9.93 points |
+| Simple rule, no machine learning | 9.44 points |
+| **Our best model (Poisson)** | **9.35 points** |
+| Las Vegas betting markets | ~9.10 points |
+
+Two honest takeaways:
+
+1. **NFL games are mostly unpredictable.** The gap between "guess the average
+   every time" and "professional betting markets with millions of dollars
+   behind them" is only about 0.8 points. Most of what decides a football game
+   is randomness — a tipped pass, a fumble bouncing the right way, a kicker's
+   bad afternoon. No model fixes that.
+2. **We are behind the market, and that's the real scoreboard.** Vegas has
+   information we don't (late injury news, betting flow). Closing that gap is
+   the point of the project.
+
+> **For dbt/SQL folks:** RMSE is just
+> `SQRT(AVG(POWER(actual - predicted, 2)))`. Squaring before averaging is what
+> makes one 20-point miss hurt more than four 5-point misses.
+
+---
+
+## 2. Vocabulary you'll need
+
+### Football terms
+
+**Drive** — one team's continuous possession of the ball, from getting it to
+losing it (by scoring, punting, or turning it over). A typical game has about
+11 drives per team. Points come from drives, so drives are the natural unit.
+
+**EPA (Expected Points Added)** — the single most useful stat in modern
+football analysis. Every game situation has an expected point value based on
+history: "1st down on your own 25" is worth about 0.9 points on average. If a
+play moves you to a situation worth 2.1 points, that play's EPA is +1.2.
+
+Why it beats yards: a 4-yard gain on 3rd-and-2 (keeps your drive alive) and a
+4-yard gain on 3rd-and-15 (ends it) are identical in yards and opposite in
+value. EPA knows the difference.
+
+**Success rate** — the share of plays with positive EPA. EPA measures *how
+much*; success rate measures *how often*. A team with one huge play and
+nine bad ones has good EPA and terrible success rate.
+
+**Home field advantage** — home teams win more. Worth roughly 2 points.
+
+**Rest days** — days since a team's last game. Usually 7. Sometimes 4 (Thursday
+games) or 14 (after a bye week).
+
+### Machine learning terms
+
+**Feature** — an input to the model. "How well has the home team's offense
+been playing lately" is a feature. Features are the columns; the score is what
+we predict.
+
+**Training vs. testing** — you fit the model on past games (training), then
+check it on games it has never seen (testing). Testing on games you trained on
+is like grading your own homework with the answer key open.
+
+**Leakage** — accidentally letting the model see information it couldn't have
+had at prediction time. This is *the* cardinal sin here and most of this
+project's engineering exists to prevent it. See section 4.
+
+**Baseline** — a deliberately simple method you must beat. Ours blends each
+team's recent scoring with the opponent's recent scoring allowed, plus home
+field. No machine learning at all. If a fancy model can't beat that, the
+fancy model isn't adding anything.
+
+**Overfitting** — the model memorizes quirks of past games instead of learning
+real patterns, so it looks great on data it has seen and fails on new games.
+Like memorizing answers to last year's exam.
+
+**Regularization** — the standard cure for overfitting: penalize the model for
+relying too heavily on any one input. See section 7 — this turned out to be
+the single most important fix in the project.
+
+---
+
+## 3. How the system works
+
+Data flows one direction, in stages. Nothing loops back.
+
+```
+ STEP 1: DOWNLOAD           free public NFL data
+ ─────────────────────────────────────────────────────────────
+   schedules   →  who played whom, when, final scores
+   play-by-play →  every play of every game since 2019 (~343k rows)
+   injuries    →  the official weekly injury report
+   snap counts →  what share of plays each player was on the field for
+
+                            ↓
+
+ STEP 2: SUMMARIZE          one row per team per game
+ ─────────────────────────────────────────────────────────────
+   "In game X, Kansas City averaged +0.12 EPA per play on offense,
+    allowed -0.03 on defense, had 11 drives, 7 rest days..."
+
+                            ↓
+
+ STEP 3: LOOK BACKWARD ONLY  ← the critical step
+ ─────────────────────────────────────────────────────────────
+   For each game, summarize how each team had been playing
+   BEFORE that game. Recent games count more than old ones.
+
+                            ↓
+
+ STEP 4: ONE ROW PER GAME   the modeling table
+ ─────────────────────────────────────────────────────────────
+   home team's recent form | away team's recent form | actual score
+
+                            ↓
+
+ STEP 5: PREDICT AND SCORE
+ ─────────────────────────────────────────────────────────────
+   Train on past games, predict future ones, measure the error.
+```
+
+> **For dbt/SQL folks:** this is exactly a staged dbt project.
+> Step 1 is your `raw` sources. Step 2 is `staging` — light cleanup, one grain
+> change. Steps 3–4 are `intermediate` and `marts`. Each stage is a script
+> that reads Parquet files and writes one Parquet file, the way a dbt model
+> reads refs and writes a table. `src/features/build_all.py` is the DAG
+> runner — it knows the dependency order and refuses to continue if a stage
+> fails. Parquet is just columnar storage; think "a table on disk."
+
+### Why "recent games count more"
+
+A team in week 12 is not the team it was in week 1 — players get injured,
+schemes change. So older games are weighted down using **exponential decay**
+with a **half-life of 17 weeks**: a game 17 weeks ago counts half as much as
+last week's game, a game 34 weeks ago a quarter as much, and so on.
+
+The 17-week value was originally a guess. It has since been tested across
+values from 4 to 52 weeks, and 17 really is the best — see section 7.
+
+---
+
+## 4. Leakage: the rule everything else serves
+
+**The rule:** to predict a game, the model may only use information that
+genuinely existed before that game kicked off.
+
+This sounds obvious and is extremely easy to violate by accident. Real examples
+from this project:
+
+- Computing a team's season EPA average and attaching it to every game that
+  season — including games that helped produce that average. The model would
+  "know" how the season turned out.
+- Filling in missing values using the average of *all* data, including future
+  games. A tiny leak, and it inflates accuracy.
+- Using a stat published on Monday to predict Sunday's game.
+
+The consequence is always the same: the model looks excellent in testing and
+fails in reality, because reality doesn't hand you the future.
+
+### How we prevent it
+
+**Walk-forward testing.** Never test on a random sample of games. Instead:
+
+```
+Train on 2019–2020 ───────────► predict week 1 of 2021
+Train on 2019–2020 + wk 1 ────► predict week 2 of 2021
+Train on 2019–2020 + wks 1–2 ─► predict week 3 of 2021
+... and so on, 111 times
+```
+
+Each prediction is made knowing only what was actually knowable at the time.
+It is slower and it scores worse than a random split — that's the point. The
+random split was lying.
+
+**Tests that try to break it.** `tests/` contains hand-built fake teams where
+the right answer is known. For example: a team scores 10, 20, 30, then 40
+points. The "recent form" value attached to game 4 must land between 10 and 30.
+If it's 40, the model has seen the game it's predicting, and the test fails.
+
+We also verify these tests actually work by deliberately breaking the real
+code and confirming the tests catch it. A test that can never fail is worse
+than no test, because it creates false confidence.
+
+> **For dbt/SQL folks:** leakage is a join that ignores effective dates —
+> joining a fact to a slowly-changing dimension without `WHERE valid_from <=
+> event_date`. The walk-forward harness is a window function with an explicit
+> frame: only rows strictly before the current one. The leakage tests are dbt
+> tests, except asserting temporal correctness rather than uniqueness.
+
+---
+
+## 5. Running it
+
+Requires Python 3.12.
+
+```bash
+pip install -r requirements.txt
+```
+
+**Step 1 — download the data** (slow the first time; play-by-play is ~130 MB):
+
+```bash
 python src/ingest/pull_schedules.py
+python src/ingest/pull_pbp.py
+python src/ingest/pull_injuries.py
+```
+
+**Step 2 — build all the features** (about 30 seconds, all 10 stages in order):
+
+```bash
+python -m src.features.build_all
+```
+
+**Step 3 — check it worked:**
+
+```bash
+pytest tests/ -v
+```
+
+**Step 4 — train and score a model:**
+
+```bash
+python -m src.models.baseline      # the no-ML benchmark, ~1 second
+python -m src.models.linear        # ~30 seconds
+python -m src.models.poisson_glm   # ~50 seconds, currently the best
+```
+
+**Compare everything at once:**
+
+```bash
+python -m src.validate.model_scoreboard --against baseline
+```
+
+Note: scripts that import from other project files must be run with `-m` from
+the repo root (`python -m src.models.linear`), not as a file path.
+
+---
+
+## 6. Project layout
+
+```
+src/
+  ingest/      downloads raw data. Run these first.
+  features/    turns raw data into model inputs. build_all.py runs them in order.
+  models/      the prediction models themselves
+    unused/    models that were built, measured, and shelved — kept on purpose
+  validate/    the scoring harness, error analysis, calibration
+  experiments/ one-off tests of "would this idea help?" — never touched by production
+tests/         correctness and leakage gates
+data/
+  raw/         downloaded data (not in git)
+  processed/   built features (not in git)
+```
+
+Two conventions worth knowing:
+
+**Failed ideas are kept, not deleted.** `src/models/unused/` holds nine models
+that were properly built and measured and did not earn a place. Deleting them
+would mean someone rebuilds them in a year. Their docstrings say what happened.
+
+**Experiments never touch production.** Testing a new idea means writing a
+standalone script in `src/experiments/` that reads production data and writes
+nothing back. Production changes only after the experiment shows the idea works.
+
+---
+
+## 7. What we've actually learned
+
+These are measured results, not opinions. All use the same 1,426-game test set.
+
+### The model was drowning in features, not starving for them
+
+The intuition "add more football knowledge, get better predictions" is wrong
+here. We built four new families of advanced stats — pace of play, efficiency
+with blowouts excluded, turnover luck, kicking — and **every single one made
+the model worse**, with the damage growing as more were added.
+
+The cause wasn't bad football. The linear model was using an estimator with no
+regularization on 18 inputs and only ~1,900 training games. It was memorizing
+noise. Switching to a regularized version (**ridge regression**) fixed it.
+
+**The lesson:** with limited data, fewer strong inputs beat many weak ones.
+
+### Injuries help — the first feature that ever did
+
+The model had no idea who was actually playing. Adding that helped, but *how*
+it was added mattered enormously.
+
+A plain count of injured players is useless — losing a starting left tackle and
+losing a fourth-string linebacker both count as "1." Instead we compute a
+single number per team:
+
+```
+injury_impact = Σ (how valuable the position is  ×  how much that player
+                   had actually been playing)
+```
+
+That one column improved both models with statistical confidence — the first
+feature in the project's history to do so.
+
+We also tested a separate "starting QB is out" flag. It made things **worse**
+when added alongside, because a missing QB already dominates the impact number.
+Two features fighting over the same signal is worse than one clean feature.
+
+### Ideas that were tested and rejected
+
+Recorded so nobody rebuilds them:
+
+| Idea | Outcome |
+|---|---|
+| Splitting efficiency into passing vs. rushing | Measurably worse |
+| CPOE (a quarterback accuracy stat) | Worse |
+| Adjusting stats for opponent strength | No effect |
+| Quarterback-specific historical stats | No effect |
+| Pace, turnover luck, special teams | Worse |
+| Weather | Not usable — see below |
+
+**Weather deserves explaining.** Historical weather is what *actually
+happened*. But to predict a future game you'd only have a *forecast*, which is
+often wrong. Training on truth and predicting from guesses is a mismatch that
+makes the model worse, not better. (We also confirmed the data source has no
+pre-game forecasts at all.)
+
+**Betting odds are deliberately excluded** from the model's inputs. They're
+extremely predictive — they contain everything the market knows — which is
+exactly the problem. A model that has learned to copy Vegas has learned
+nothing, and can never beat Vegas. Odds are used only as a scoreboard.
+
+---
+
+## 8. Testing philosophy
+
+235 tests in four layers:
+
+1. **Data contracts** — is the downloaded data shaped correctly? (Exactly 32
+   teams, no duplicate plays, scores non-negative.)
+2. **Leakage gates** — hand-built examples with known answers, proving no
+   future information reaches the model.
+3. **Freshness gates** — every built file must be newer than the files it was
+   built from. This caught a real bug where results were being compared against
+   a stale table for two days.
+4. **Statistical honesty** — improvements smaller than ~0.05 RMSE must pass a
+   **bootstrap test** before being believed.
+
+> **What's a bootstrap test?** If a change improves error from 9.40 to 9.38, is
+> that real or luck? We re-draw the 1,426 games at random (with repeats) 5,000
+> times and re-measure. If the improvement holds up across nearly all 5,000
+> redraws, it's real. If it flips sign depending on which games we drew, it was
+> noise. Most promising-looking improvements in this project turned out to be
+> noise, which is precisely why the test exists.
+
+---
+
+## 9. Current status and what's next
+
+**Working:** the full data pipeline, leakage-safe evaluation, several trained
+models, and an honest measurement of how good they are.
+
+**Not built yet:** there is no live prediction step. `src/predict/` is empty.
+The system can tell you how well it *would have* predicted past games; it
+cannot yet hand you a prediction for next Sunday. That's the most obvious
+missing piece.
+
+**Known gaps:**
+- No live starting-quarterback source for future games (historical data uses
+  who actually played, which you don't know in advance).
+- The Gaussian Process model takes 36 minutes to evaluate and is no longer
+  better than models that take seconds.
+- The ensemble that combines models does not beat the single best model.
+
+**Current benchmark** (1,426 games, 2021–2026, typical error per team's score):
+
+| Model | Error | Beats the no-ML baseline? |
+|---|---|---|
+| Poisson GLM | **9.3525** | yes, confirmed |
+| Ridge regression | 9.3685 | yes, confirmed |
+| Rule-based baseline | 9.4415 | — |
+
+Any change is measured against these numbers.
