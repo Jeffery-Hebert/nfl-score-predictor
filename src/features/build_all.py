@@ -70,8 +70,22 @@ STAGES = [
         "output": "data/processed/team_drive_rolling_features.parquet",
     },
     {
+        "module": "src.features.build_injury_features",
+        "inputs": [
+            "data/raw/injuries.parquet",
+            "data/raw/snap_counts.parquet",
+            "data/raw/player_ids.parquet",
+            RAW_SCHEDULES,
+        ],
+        "output": "data/processed/injury_features.parquet",
+    },
+    {
         "module": "src.features.build_game_features",
-        "inputs": ["data/processed/team_rolling_features.parquet", RAW_SCHEDULES],
+        "inputs": [
+            "data/processed/team_rolling_features.parquet",
+            "data/processed/injury_features.parquet",
+            RAW_SCHEDULES,
+        ],
         "output": "data/processed/model_table.parquet",
     },
     {
@@ -114,8 +128,15 @@ def git_state() -> dict:
 
 def check_inputs_exist() -> list[str]:
     """Raw inputs can't be built by this script -- fail early with the fix."""
-    missing = [p for p in (RAW_SCHEDULES, RAW_PBP, CONFIG) if not Path(p).exists()]
-    return missing
+    required = (
+        RAW_SCHEDULES,
+        RAW_PBP,
+        CONFIG,
+        "data/raw/injuries.parquet",
+        "data/raw/snap_counts.parquet",
+        "data/raw/player_ids.parquet",
+    )
+    return [p for p in required if not Path(p).exists()]
 
 
 def main():
@@ -139,6 +160,7 @@ def main():
         print("Run the ingestion scripts first:")
         print("  python src/ingest/pull_schedules.py")
         print("  python src/ingest/pull_pbp.py")
+        print("  python src/ingest/pull_injuries.py")
         sys.exit(1)
 
     Path("data/processed").mkdir(parents=True, exist_ok=True)

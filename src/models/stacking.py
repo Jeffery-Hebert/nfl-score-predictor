@@ -16,12 +16,22 @@ to the base predictions it's stacking.
 Run: python -m src.models.stacking
 """
 
+import numpy as np
 import pandas as pd
-from sklearn.linear_model import Ridge
+from sklearn.linear_model import RidgeCV
+from sklearn.model_selection import TimeSeriesSplit
 from sklearn.preprocessing import StandardScaler
 from src.validate.walk_forward import walk_forward_evaluate, score_predictions
 
 BASE_MODELS = ["linear", "poisson", "gp"]
+
+# Ridge penalty for the meta-model. This was Ridge(alpha=1.0) -- regularized,
+# but at a strength nobody chose. Same defect class as linear.py's complete
+# absence of regularization, just less severe. alpha is now selected by
+# RidgeCV from a TimeSeriesSplit INSIDE each training fold, so the test week
+# never influences the choice.
+ALPHAS = np.logspace(-2, 4, 25)
+INNER_CV = 5
 
 
 def load_meta_table() -> pd.DataFrame:
@@ -54,10 +64,13 @@ def fit_stack(train: pd.DataFrame) -> dict:
     scaler_home = StandardScaler().fit(train[home_cols])
     scaler_away = StandardScaler().fit(train[away_cols])
 
-    ridge_home = Ridge(alpha=1.0).fit(
+    def _ridge():
+        return RidgeCV(alphas=ALPHAS, cv=TimeSeriesSplit(n_splits=INNER_CV))
+
+    ridge_home = _ridge().fit(
         scaler_home.transform(train[home_cols]), train["home_score"]
     )
-    ridge_away = Ridge(alpha=1.0).fit(
+    ridge_away = _ridge().fit(
         scaler_away.transform(train[away_cols]), train["away_score"]
     )
 

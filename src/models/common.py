@@ -32,9 +32,26 @@ BASE_FEATURE_COLS = [
 #   C4 -- playoff games were mixed into the regular season unmarked (89 games).
 GAME_FEATURE_COLS = ["is_neutral_site", "is_playoff"]
 
+# Per-team availability signal from src/features/build_injury_features.py.
+# Sided like BASE_FEATURE_COLS but sourced from injury_features.parquet rather
+# than team_rolling_features.parquet, hence a separate list.
+#
+# injury_impact = sum over unavailable players of positional value x prior snap
+# share. It is the first feature in this project's history to clear the
+# promotion gate on both Linear and Poisson (-0.0355 and -0.0388, CIs excluding
+# zero).
+#
+# qb_out was tested alongside it and deliberately NOT adopted: it is largely
+# redundant (a starting QB out already dominates injury_impact via weight 1.00
+# x ~1.0 snap share) and adding it DILUTED the result on both models
+# (-0.0388 -> -0.0312 on Poisson). Fewer, stronger features win here.
+INJURY_FEATURE_COLS = ["injury_impact"]
+
 FEATURE_COLS = (
     [f"home_{c}" for c in BASE_FEATURE_COLS]
     + [f"away_{c}" for c in BASE_FEATURE_COLS]
+    + [f"home_{c}" for c in INJURY_FEATURE_COLS]
+    + [f"away_{c}" for c in INJURY_FEATURE_COLS]
     + GAME_FEATURE_COLS
 )
 

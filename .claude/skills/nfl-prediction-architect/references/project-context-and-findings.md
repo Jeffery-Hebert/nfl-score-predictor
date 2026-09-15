@@ -272,6 +272,90 @@ features over adding many raw ones.
 **Benchmark after adopting ridge** (n=1426, mean of home/away RMSE):
   baseline 9.4415 | linear 9.4045 (was 9.4110) | poisson 9.3920
 
+## FIRST CONFIRMED FEATURE WIN: Injury Availability (2026-09-15)
+
+After five documented null results, a feature cleared the promotion gate on
+both production models. Recorded in full because the *sequencing* mattered as
+much as the feature.
+
+**The feature.** `src/features/build_injury_features.py` compresses the
+official injury report to ONE column per team:
+
+    injury_impact = sum over unavailable players of
+                        positional_value x prior_snap_share
+
+with Questionable at half weight. The idea that makes it work: a starting left
+tackle being out and a fourth-string linebacker being out are not the same
+event, and snap share is how you tell them apart. A plain count of injured
+players cannot, which is likely why "injuries" felt intractable before.
+
+**Result** (paired bootstrap, 5,000 resamples over games, pooled home+away):
+
+| model | base | +injury_impact | delta | 95% CI | verdict |
+|---|---|---|---|---|---|
+| Linear (RidgeCV) | 9.4045 | 9.3687 | -0.0355 | [-0.0607, -0.0102] | **BETTER** |
+| Poisson | 9.3921 | 9.3530 | -0.0388 | [-0.0655, -0.0111] | **BETTER** |
+
+**qb_out was tested and deliberately REJECTED.** It helped on its own but both
+CIs spanned zero, and adding it on top of injury_impact made things *worse*
+(Poisson -0.0388 -> -0.0312). A starting QB out already dominates the impact
+sum via weight 1.00 x ~1.0 snap share, so the extra column is redundant and
+costs more in variance than it returns. Do not re-add it.
+
+**Why this worked when everything else failed.** The estimator was fixed first.
+Under the old unregularized OLS the model was feature-saturated and degraded
+with every addition; injuries would have produced a misleading null and the
+idea would have been recorded as dead. The order was: diagnose saturation ->
+regularize -> compress the new information to one column -> test.
+
+**Two bugs the builder shipped first, both of which produced plausible output:**
+
+1. The leakage filter dropped rows with a NaT `date_modified` alongside rows
+   genuinely published after kickoff. nflverse stopped populating that field in
+   2025, so it silently discarded the two most recent seasons -- 6,250 rows --
+   while reporting a sensible-looking count. Only 22 rows are actually late.
+2. Snap share was joined on `(game_id, gsis_id)`. A player ruled Out has no
+   snap row for that game, so the join failed for exactly the players the
+   feature exists to measure: 0 of 289 QB-out rows matched and qb_out came out
+   identically zero. Fixed with a `merge_asof` on the player's history at
+   kickoff (`allow_exact_matches=False`), 97.2% match rate.
+
+Both are covered by `tests/test_injury_leakage.py` (6 tests, mutation-verified:
+flipping `allow_exact_matches` back to True fails 3 of them).
+
+**Leakage position.** Injury reports publish a median 49 hours before kickoff.
+Snap counts are post-game but are only ever read from PRIOR games via the
+as-of join, never from the game being predicted.
+
+## Estimator Repairs (2026-09-15)
+
+Audited every estimator in the project for the defect found in linear.py.
+
+- **linear.py** -- was `LinearRegression`, ordinary least squares, NO
+  regularization. Fixed to `RidgeCV` with in-fold `TimeSeriesSplit`.
+  9.4110 -> 9.4045. Genuinely broken; genuinely fixed.
+- **stacking.py** -- was `Ridge(alpha=1.0)` hardcoded and never validated.
+  Fixed to `RidgeCV` with the same in-fold pattern. 9.366/9.242 -> 9.361/9.236.
+- **poisson_glm.py** -- `PoissonRegressor` alpha defaulted to 1.0. **Tested
+  in-fold selection and REVERTED it**: mean RMSE 9.4175 against 9.3920 for the
+  default, at 3.5x the runtime. The inner folds are small enough that the
+  selected alpha is noisy and the adaptivity costs more than it buys. The
+  default stands, now on evidence. An earlier note in this document called
+  Poisson's alpha a defect of the same class as linear.py's missing
+  regularization; that was an overstatement. A fixed hyperparameter that has
+  been checked is fine. Do NOT "fix" this by copying linear.py's pattern.
+- **gaussian_process.py** -- WhiteKernel supplies noise regularization and
+  kernel hyperparameters are fitted by marginal likelihood. No defect.
+- Shelved models all carry explicit regularization (depth limits, reg_alpha,
+  l2_leaf_reg, weight_decay, priors). No defect.
+
+Also: `GridSearchCV` without `n_jobs=-1` ran the inner search serially and took
+the Poisson walk-forward from ~1 minute to over 13. Worth remembering before
+concluding that in-fold selection is unaffordable.
+
+**Benchmark after all of the above** (n=1426, mean of home/away RMSE):
+  baseline 9.4415 | linear 9.3685 | poisson 9.3525
+
 ## Real, Unresolved Gaps (Worth Pursuing With New Data or New Direction, Not New Cuts of Old Data)
 
 - **No injury/inactive/depth-chart data source.** This is the single most-cited real gap across every session — the model has no visibility into who is actually playing, which is the dominant driver of the QB-identity and finale-week findings above. Solving this requires a new data source, not new feature engineering on existing play-by-play.
