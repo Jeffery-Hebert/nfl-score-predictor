@@ -356,6 +356,66 @@ concluding that in-fold selection is unaffordable.
 **Benchmark after all of the above** (n=1426, mean of home/away RMSE):
   baseline 9.4415 | linear 9.3685 | poisson 9.3525
 
+## The Week-2 Total Gap: Investigated, Mostly Not A Bug (2026-09-15)
+
+Week 2 2026 predictions averaged 47.35 total points against a market line of
+45.31 -- a 2.04-point gap that looked like a calibration fault. It largely is
+not. Recorded in full because three plausible fixes were built and all three
+failed, and that is expensive to rediscover.
+
+**What the gap is NOT.** The model is well calibrated on totals across the
+backtest: +0.34 (linear), +0.31 (poisson). And the Week 2 market total is
+unremarkable -- 45.31 against a 45.21 eight-year average. Neither side is doing
+anything strange in aggregate.
+
+**What actually happened.** 2026 Week 1 produced 49.44 points a game against
+2025's 45.96. The model partially projected that forward off a 16-game sample;
+the market did not.
+
+**The mechanism is real.** Team form decays on CALENDAR DAYS at a 17-week
+half-life. Across a ~200-day offseason, last season's games fall to
+0.5^(200/119) ~= 0.31 weight while a Week 1 game seven days back holds ~0.96 --
+so one game outweighs a full prior season roughly 3-4x. The decay treats a
+summer as though 200 days of football happened.
+
+**Corroborated in the error analysis:** weeks 1-3 are the worst-calibrated
+stretch of the season. Total bias there is +1.14 (linear) and +0.93 (poisson)
+against +0.31 overall, and weeks 1-3 RMSE is 9.4876 against 9.3640 for weeks 4+.
+
+**Three fixes tested. All rejected.**
+
+1. `test_offseason_decay.py` -- COMPRESSED offseason (a summer counts as 45
+   days of forgetting, not 200). Helps weeks 1-3 slightly (9.4887 -> 9.4655)
+   and hurts weeks 4+ more (9.3635 -> 9.4113). Overall **WORSE**: +0.0355
+   linear (CI [+0.0032, +0.0682]), +0.0375 poisson (CI [+0.0042, +0.0711]).
+   Mechanism of failure: compressing the summer makes last season linger all
+   year, not just in September.
+
+2. `test_offseason_decay.py` -- decay by GAMES PLAYED rather than days. Same
+   shape, larger damage: +0.0656 linear, +0.0692 poisson, both CIs excluding
+   zero. **WORSE.**
+
+3. `test_early_season_bias.py` -- a second bias offset measured on historical
+   weeks 1-3 only, applied when predicting an early-season game. Noise on RMSE
+   (+0.0028 all games, +0.0148 on weeks 1-3, both CIs spanning zero) and it
+   made the weeks 1-3 total bias **worse**, +1.141 -> +1.387. Mechanism of
+   failure: historical early-season games are dominated by 2019-2021, the
+   empty-stadium era with high away scoring and no home-field edge, so the
+   offset is estimated from exactly the wrong football. The thin sample was
+   flagged as a risk before running (~336 games, SE ~0.5 against a ~1.0
+   effect); it turned out worse than thin, it was biased.
+
+**Conclusion.** The early-season weakness is real and measurable but is not
+fixable by re-weighting history -- every scheme that helps September costs more
+in October through January. The remaining gap is genuine disagreement between
+a model that reacts to Week 1 and a market that does not. Which of them is
+right is an empirical question that Week 2's results will start to answer.
+
+**If revisited, do NOT re-try the three above.** The promising untested
+direction is shrinking early-season features toward a PRIOR-SEASON team rating
+rather than toward recent games -- that keeps team identity while refusing to
+over-read one game, and is a different mechanism from anything tried here.
+
 ## Real, Unresolved Gaps (Worth Pursuing With New Data or New Direction, Not New Cuts of Old Data)
 
 - **No injury/inactive/depth-chart data source.** This is the single most-cited real gap across every session — the model has no visibility into who is actually playing, which is the dominant driver of the QB-identity and finale-week findings above. Solving this requires a new data source, not new feature engineering on existing play-by-play.
