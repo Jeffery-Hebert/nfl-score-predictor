@@ -15,21 +15,31 @@ from src.models.common import FEATURE_COLS
 from src.validate.walk_forward import walk_forward_evaluate, score_predictions
 
 BLENDED_COLS_TO_REMOVE = [
-    "home_pregame_off_epa_per_play", "home_pregame_def_epa_per_play",
-    "away_pregame_off_epa_per_play", "away_pregame_def_epa_per_play",
+    "home_pregame_off_epa_per_play",
+    "home_pregame_def_epa_per_play",
+    "away_pregame_off_epa_per_play",
+    "away_pregame_def_epa_per_play",
 ]
 NEW_STAT_COLS = [
-    "pregame_off_pass_epa_per_play", "pregame_off_rush_epa_per_play", "pregame_off_cpoe",
-    "pregame_def_pass_epa_per_play_allowed", "pregame_def_rush_epa_per_play_allowed", "pregame_def_cpoe_allowed",
+    "pregame_off_pass_epa_per_play",
+    "pregame_off_rush_epa_per_play",
+    "pregame_off_cpoe",
+    "pregame_def_pass_epa_per_play_allowed",
+    "pregame_def_rush_epa_per_play_allowed",
+    "pregame_def_cpoe_allowed",
 ]
-NEW_FEATURE_COLS = [f"home_{c}" for c in NEW_STAT_COLS] + [f"away_{c}" for c in NEW_STAT_COLS]
+NEW_FEATURE_COLS = [f"home_{c}" for c in NEW_STAT_COLS] + [
+    f"away_{c}" for c in NEW_STAT_COLS
+]
 
 
 def build_merged_table() -> pd.DataFrame:
     model_table = pd.read_parquet("data/processed/model_table.parquet")
     rolling = pd.read_parquet("data/processed/team_rolling_features.parquet")
 
-    home = rolling[rolling["is_home"] == 1][["game_id", "team", "opponent"] + NEW_STAT_COLS]
+    home = rolling[rolling["is_home"] == 1][
+        ["game_id", "team", "opponent"] + NEW_STAT_COLS
+    ]
     home = home.rename(columns={c: f"home_{c}" for c in NEW_STAT_COLS})
     home = home.rename(columns={"team": "home_team", "opponent": "away_team"})
 
@@ -37,7 +47,9 @@ def build_merged_table() -> pd.DataFrame:
     away = away.rename(columns={c: f"away_{c}" for c in NEW_STAT_COLS})
     away = away.rename(columns={"team": "away_team"})
 
-    merged = model_table.merge(home, on=["game_id", "home_team", "away_team"], how="left")
+    merged = model_table.merge(
+        home, on=["game_id", "home_team", "away_team"], how="left"
+    )
     merged = merged.merge(away, on=["game_id", "away_team"], how="left")
     return merged
 
@@ -48,12 +60,25 @@ def make_rf_fns(feature_cols):
         means = X.mean()
         X_filled = X.fillna(means)
         home_model = RandomForestRegressor(
-            n_estimators=300, max_depth=4, min_samples_leaf=15, random_state=42, n_jobs=-1
+            n_estimators=300,
+            max_depth=4,
+            min_samples_leaf=15,
+            random_state=42,
+            n_jobs=-1,
         ).fit(X_filled, train["home_score"])
         away_model = RandomForestRegressor(
-            n_estimators=300, max_depth=4, min_samples_leaf=15, random_state=42, n_jobs=-1
+            n_estimators=300,
+            max_depth=4,
+            min_samples_leaf=15,
+            random_state=42,
+            n_jobs=-1,
         ).fit(X_filled, train["away_score"])
-        return {"home_model": home_model, "away_model": away_model, "means": means, "feature_cols": feature_cols}
+        return {
+            "home_model": home_model,
+            "away_model": away_model,
+            "means": means,
+            "feature_cols": feature_cols,
+        }
 
     def predict_fn(model, test):
         X = test[model["feature_cols"]].fillna(model["means"])
@@ -70,7 +95,9 @@ def run_model(make_fns, df, feature_cols):
 
 def main():
     df = build_merged_table()
-    extended_cols = [c for c in FEATURE_COLS if c not in BLENDED_COLS_TO_REMOVE] + NEW_FEATURE_COLS
+    extended_cols = [
+        c for c in FEATURE_COLS if c not in BLENDED_COLS_TO_REMOVE
+    ] + NEW_FEATURE_COLS
 
     print("Running baseline Random Forest (blended EPA, no CPOE)...")
     base_metrics, base_results = run_model(make_rf_fns, df, FEATURE_COLS)
@@ -91,7 +118,9 @@ def main():
         print(f"  {metric}: {ext_metrics[metric] - base_metrics[metric]:+.4f}")
 
     base_results.to_parquet("data/processed/rf_base_predictions.parquet", index=False)
-    ext_results.to_parquet("data/processed/rf_extended_predictions.parquet", index=False)
+    ext_results.to_parquet(
+        "data/processed/rf_extended_predictions.parquet", index=False
+    )
 
 
 if __name__ == "__main__":
