@@ -2,23 +2,16 @@
 Assembles the final model-ready table: one row per game, with home and away
 teams' pregame rolling features side-by-side, and the target scores attached.
 
-Run: python src/features/build_game_features.py
+Run: python -m src.features.build_game_features
 Output: data/processed/model_table.parquet
 """
 
 import pandas as pd
 from pathlib import Path
 
-FEATURE_COLS = [
-    "pregame_team_score",
-    "pregame_opp_score",
-    "pregame_off_epa_per_play",
-    "pregame_def_epa_per_play",
-    "pregame_off_success_rate",
-    "pregame_def_success_rate_allowed",
-    "rest_days",
-    "prior_games_played",
-]
+# Single source of truth -- this list used to be duplicated here by hand and
+# had to be kept in sync with src/models/common.py. See that module's docstring.
+from src.models.common import BASE_FEATURE_COLS as FEATURE_COLS
 
 
 def main():

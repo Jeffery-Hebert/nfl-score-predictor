@@ -11,6 +11,27 @@ import time
 import pandas as pd
 import numpy as np
 
+RESULT_COLS = ["game_id", "season", "week", "home_score", "away_score"]
+
+
+def _combine(results: list) -> pd.DataFrame:
+    """Stack the per-fold frames.
+
+    Every fold can legitimately be skipped -- too little history, or a
+    min_train_seasons burn-in longer than the data. pd.concat([]) raises an
+    opaque "No objects to concatenate" there, which reads like a crash rather
+    than the empty-but-valid result it is. Return a correctly-shaped empty
+    frame instead, so callers can check len() and score_predictions() does not
+    blow up on a KeyError.
+    """
+    if not results:
+        print(
+            "  WARNING: every fold was skipped -- no predictions produced. "
+            "Check min_train_seasons and that the data covers enough seasons."
+        )
+        return pd.DataFrame(columns=RESULT_COLS + ["home_pred", "away_pred"])
+    return pd.concat(results, ignore_index=True)
+
 
 def walk_forward_evaluate(
     df: pd.DataFrame, fit_fn, predict_fn, min_train_seasons: int = 2
@@ -75,7 +96,7 @@ def walk_forward_evaluate(
         f"({total_elapsed/max(total_folds,1):.2f}s/fold avg)"
     )
 
-    return pd.concat(results, ignore_index=True)
+    return _combine(results)
 
 
 def walk_forward_evaluate_by_season(
@@ -113,7 +134,7 @@ def walk_forward_evaluate_by_season(
         elapsed = time.time() - start_time
         print(f"  [{elapsed:7.1f}s] season {season} ({i}/{len(test_seasons)}) done")
 
-    return pd.concat(results, ignore_index=True)
+    return _combine(results)
 
 
 def score_predictions(results: pd.DataFrame) -> dict:

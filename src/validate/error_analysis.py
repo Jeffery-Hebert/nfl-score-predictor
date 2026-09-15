@@ -4,11 +4,29 @@ and week-of-season slicing. Answers: is the model consistently off (easy
 to correct) or inconsistently off (hard to trust)? Does accuracy differ
 between early-season and late-season games?
 
-Run: python -m src.validate.error_analysis
+Run: python -m src.validate.error_analysis                  # every saved model
+     python -m src.validate.error_analysis linear poisson  # named models
+     python -m src.validate.error_analysis --file data/processed/rf_base_predictions.parquet
 """
+
+import argparse
+import sys
+from pathlib import Path
 
 import pandas as pd
 import numpy as np
+
+PRED_DIR = Path("data/processed")
+
+
+def discover_models() -> dict[str, str]:
+    """Every *_predictions.parquet on disk, newest first."""
+    found = sorted(
+        PRED_DIR.glob("*_predictions.parquet"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    return {p.name.replace("_predictions.parquet", ""): str(p) for p in found}
 
 
 def analyze(preds_path: str, label: str):
@@ -74,9 +92,57 @@ def analyze(preds_path: str, label: str):
     print(worst.to_string(index=False))
 
 
+def main(argv=None):
+    available = discover_models()
+    ap = argparse.ArgumentParser(
+        description="Residual/error analysis for saved predictions."
+    )
+    ap.add_argument(
+        "models",
+        nargs="*",
+        help=f"model names to analyze (default: all). Available: {', '.join(sorted(available)) or 'none found'}",
+    )
+    ap.add_argument(
+        "--file",
+        action="append",
+        default=[],
+        help="analyze an explicit prediction parquet path (repeatable)",
+    )
+    ap.add_argument(
+        "--list", action="store_true", help="list available models and exit"
+    )
+    args = ap.parse_args(argv)
+
+    if args.list:
+        for name, path in available.items():
+            print(f"  {name:<16} {path}")
+        return 0
+
+    targets = []
+    for name in args.models:
+        if name not in available:
+            print(
+                f"ERROR: no predictions for {name!r}. Available: {', '.join(sorted(available)) or 'none'}"
+            )
+            return 1
+        targets.append((available[name], name))
+    for path in args.file:
+        if not Path(path).exists():
+            print(f"ERROR: {path} does not exist")
+            return 1
+        targets.append((path, Path(path).stem))
+    if not targets:
+        if not available:
+            print(
+                "No *_predictions.parquet found in data/processed -- run a model first."
+            )
+            return 1
+        targets = [(p, n) for n, p in available.items()]
+
+    for path, label in targets:
+        analyze(path, label)
+    return 0
+
+
 if __name__ == "__main__":
-    # analyze("data/processed/poisson_predictions.parquet", "Poisson GLM")
-    # analyze("data/processed/gp_predictions.parquet", "Gaussian Process")
-    analyze("data/processed/linear_predictions.parquet", "Linear Regression")
-    analyze("data/processed/stacking_predictions.parquet", "Stacking Meta-Model")
-    analyze("data/processed/rf_extended_predictions.parquet", "**New RF**")
+    sys.exit(main())
