@@ -1,7 +1,7 @@
 """
 LightGBM: handles missing values natively.
 
-Run: python -m src.models.lightgbm_model
+Run: python -m src.models.unused.lightgbm_model
 """
 
 import pandas as pd

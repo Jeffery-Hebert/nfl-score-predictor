@@ -1,7 +1,7 @@
 """
 XGBoost: handles missing values natively -- no imputation needed.
 
-Run: python -m src.models.xgboost_model
+Run: python -m src.models.unused.xgboost_model
 """
 
 import pandas as pd

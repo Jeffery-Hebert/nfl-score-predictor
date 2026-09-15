@@ -2,7 +2,7 @@
 Random Forest: 200 trees, scale-invariant, but sklearn's implementation
 requires imputed inputs (no native NaN support), unlike the GBM libraries.
 
-Run: python -m src.models.random_forest
+Run: python -m src.models.unused.random_forest
 """
 
 import pandas as pd

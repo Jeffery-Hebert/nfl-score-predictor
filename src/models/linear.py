@@ -9,7 +9,7 @@ Run: python -m src.models.linear
 
 import pandas as pd
 from sklearn.linear_model import LinearRegression
-from src.models.common import FEATURE_COLS
+from src.models.common import FEATURE_COLS, ot_sample_weight
 from src.validate.walk_forward import walk_forward_evaluate, score_predictions
 
 
@@ -17,8 +17,9 @@ def fit_linear(train: pd.DataFrame) -> dict:
     X = train[FEATURE_COLS]
     means = X.mean()
     X_filled = X.fillna(means)
-    home_model = LinearRegression().fit(X_filled, train["home_score"])
-    away_model = LinearRegression().fit(X_filled, train["away_score"])
+    w = ot_sample_weight(train)  # C5: halve historical overtime games
+    home_model = LinearRegression().fit(X_filled, train["home_score"], sample_weight=w)
+    away_model = LinearRegression().fit(X_filled, train["away_score"], sample_weight=w)
     return {"home_model": home_model, "away_model": away_model, "means": means}
 
 

@@ -11,14 +11,33 @@ Run: pytest tests/test_feature_cols.py -v
 
 import pytest
 
-from src.models.common import BASE_FEATURE_COLS, FEATURE_COLS
+from src.models.common import BASE_FEATURE_COLS, FEATURE_COLS, GAME_FEATURE_COLS
 
 
-def test_feature_cols_is_base_prefixed_home_then_away():
-    expected = [f"home_{c}" for c in BASE_FEATURE_COLS] + [
-        f"away_{c}" for c in BASE_FEATURE_COLS
-    ]
+def test_feature_cols_is_base_prefixed_home_then_away_plus_game_level():
+    expected = (
+        [f"home_{c}" for c in BASE_FEATURE_COLS]
+        + [f"away_{c}" for c in BASE_FEATURE_COLS]
+        + GAME_FEATURE_COLS
+    )
     assert FEATURE_COLS == expected
+
+
+def test_game_level_features_are_not_sided():
+    """is_neutral_site / is_playoff describe the fixture, not a team, so they
+    must not carry a home_/away_ prefix."""
+    for c in GAME_FEATURE_COLS:
+        assert not c.startswith(("home_", "away_")), f"{c} should not be sided"
+        assert c in FEATURE_COLS
+
+
+def test_overtime_is_never_a_feature():
+    """C5 guard. went_to_ot is 0% populated before kickoff; using it as an input
+    would be target leakage. It is a training-side sample weight only."""
+    from src.models.common import OT_TRAINING_COL
+
+    assert OT_TRAINING_COL not in FEATURE_COLS
+    assert not any("overtime" in c or "went_to_ot" in c for c in FEATURE_COLS)
 
 
 def test_home_and_away_sides_are_symmetric():
@@ -48,7 +67,15 @@ def test_build_game_features_uses_the_shared_list():
 def test_every_feature_is_pregame_or_a_known_non_stat(col):
     """Guards against a post-game stat entering the model feature set."""
     stripped = col.replace("home_", "", 1).replace("away_", "", 1)
-    allowed_non_pregame = {"rest_days", "prior_games_played"}
+    # rest_days and prior_games_played come from the schedule, not from play
+    # data; is_neutral_site/is_playoff are fixture context. All four are known
+    # before kickoff.
+    allowed_non_pregame = {
+        "rest_days",
+        "prior_games_played",
+        "is_neutral_site",
+        "is_playoff",
+    }
     assert (
         stripped.startswith("pregame_") or stripped in allowed_non_pregame
     ), f"{col} is neither a pregame_ stat nor a known schedule-derived column"

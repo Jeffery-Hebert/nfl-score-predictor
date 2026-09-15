@@ -16,7 +16,12 @@ data:
   # src/ingest/pull_pbp.py and src/ingest/pull_schedules.py -- edit both by hand.
 
 training:
-  recency_half_life_weeks: 17  # ~1 season. READ BY CODE. Not yet tuned empirically.
+  # READ BY CODE. Tuned 2026-09-14 via src/experiments/tune_halflife.py:
+  # swept [4, 8, 12, 17, 26, 39, 52] weeks on baseline/Linear/Poisson. The
+  # curve is unimodal and 17 is the minimum for all three
+  # (12 -> 9.4039, 17 -> 9.3921, 26 -> 9.4138 mean RMSE on Poisson).
+  # The original value was a guess that happened to be right; it is now measured.
+  recency_half_life_weeks: 17
   # Retrain cadence below is documentation only; the real schedule is the cron
   # in .github/workflows/weekly.yml.
   retrain_day: wednesday

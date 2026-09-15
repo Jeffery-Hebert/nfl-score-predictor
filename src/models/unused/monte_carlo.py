@@ -8,7 +8,7 @@ This is the agreed substitute for literal RL: there's no sequential
 agent-environment-reward structure in pregame score prediction, but this
 achieves the same practical goal (a simulated score distribution).
 
-Run: python -m src.models.monte_carlo
+Run: python -m src.models.unused.monte_carlo
 """
 
 import numpy as np

@@ -17,8 +17,10 @@ from src.models.common import BASE_FEATURE_COLS as FEATURE_COLS
 def main():
     rolling = pd.read_parquet("data/processed/team_rolling_features.parquet")
 
+    # C3/C4: game-level context, identical on both rows of a game, so it is
+    # taken from the home side once rather than prefixed home_/away_.
     home = rolling[rolling["is_home"] == 1][
-        ["game_id", "team", "opponent"] + FEATURE_COLS
+        ["game_id", "team", "opponent", "is_neutral_site", "is_playoff"] + FEATURE_COLS
     ]
     home = home.rename(columns={c: f"home_{c}" for c in FEATURE_COLS})
     home = home.rename(columns={"team": "home_team", "opponent": "away_team"})
@@ -30,11 +32,23 @@ def main():
     merged = home.merge(away, on=["game_id", "away_team"], how="inner")
 
     schedules = pd.read_parquet("data/raw/schedules.parquet")
-    final = merged.merge(
-        schedules[["game_id", "season", "week", "gameday", "home_score", "away_score"]],
-        on="game_id",
-        how="left",
-    )
+    # C5: went_to_ot is a TRAINING-side column, never a feature. It is 0%
+    # populated before kickoff, so using it as an input would be target leakage
+    # (OT games average 53.9 total points against 45.3). Models use it only to
+    # down-weight historical games whose scores an extra period inflated --
+    # the same reasoning as finale-week masking.
+    sched_cols = [
+        "game_id",
+        "season",
+        "week",
+        "gameday",
+        "home_score",
+        "away_score",
+        "overtime",
+    ]
+    final = merged.merge(schedules[sched_cols], on="game_id", how="left")
+    final["went_to_ot"] = final["overtime"].fillna(0).astype(int)
+    final = final.drop(columns=["overtime"])
 
     out_path = Path("data/processed/model_table.parquet")
     final.to_parquet(out_path, index=False)

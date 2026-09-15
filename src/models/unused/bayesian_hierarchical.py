@@ -7,7 +7,7 @@ Uses ADVI (variational inference), not full MCMC sampling -- MCMC would be
 too slow to refit ~145 times in a walk-forward loop on this hardware.
 This is a deliberate speed/precision tradeoff, not an oversight.
 
-Run: python -m src.models.bayesian_hierarchical
+Run: python -m src.models.unused.bayesian_hierarchical
 """
 
 import pandas as pd

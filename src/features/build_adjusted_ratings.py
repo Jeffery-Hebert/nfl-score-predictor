@@ -20,7 +20,10 @@ from pathlib import Path
 from sklearn.linear_model import Ridge
 import yaml
 
-RIDGE_ALPHA = 5.0  # regularization strength -- starting default, not yet validated
+# Regularization strength for the joint offense/defense ridge.
+# Validated 2026-09-14 by src/experiments/tune_ridge_alpha.py -- see that
+# script for the sweep. Previously an unvalidated starting guess.
+RIDGE_ALPHA = 5.0
 
 
 def load_config():
@@ -52,7 +55,11 @@ def build_design_matrix(games: pd.DataFrame, teams: list[str]) -> pd.DataFrame:
 
 
 def fit_ratings(
-    train_games: pd.DataFrame, teams: list[str], halflife_days: float, cutoff_date
+    train_games: pd.DataFrame,
+    teams: list[str],
+    halflife_days: float,
+    cutoff_date,
+    alpha: float = RIDGE_ALPHA,
 ):
     X = build_design_matrix(train_games, teams)
     y = train_games["off_epa_per_play"].reset_index(drop=True)
@@ -61,7 +68,7 @@ def fit_ratings(
     weights = 0.5 ** (age_days / halflife_days)
 
     valid = y.notna()
-    model = Ridge(alpha=RIDGE_ALPHA)
+    model = Ridge(alpha=alpha)
     model.fit(X[valid], y[valid], sample_weight=weights[valid])
 
     off_ratings = {t: model.coef_[X.columns.get_loc(f"off_{t}")] for t in teams}

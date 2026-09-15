@@ -53,8 +53,15 @@ def add_pregame_rolling_features(
             ignore_na=True,
         ).mean()
         group[f"pregame_{col}"] = ewm.shift(1)
-    group["rest_days"] = group["gameday"].diff().dt.days
-    group["prior_games_played"] = range(len(group))
+    # C1: rest_days now arrives from schedules (nflverse home_rest/away_rest)
+    # via build_team_game_stats.py. It is NOT recomputed here: gameday.diff()
+    # reported up to 260 days across an offseason.
+    #
+    # C2: prior_games_played counts games WITHIN the current season. It used to
+    # be a global counter running 0->152 across 2019-2026, which is a calendar
+    # index, not a football quantity -- Linear put +0.0458/game on it, a
+    # 6.1-point swing driven by nothing but the passage of time.
+    group["prior_games_played"] = group.groupby("season").cumcount()
     return group
 
 

@@ -6,7 +6,7 @@ reasoning as Bayesian/GP models: refitting a neural net 145 times (weekly)
 is unnecessary compute cost for a model already expected to struggle with
 this little data (same lesson as the MLP result).
 
-Run: python -m src.models.rnn_lstm
+Run: python -m src.models.unused.rnn_lstm
 """
 
 import numpy as np

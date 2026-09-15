@@ -7,7 +7,7 @@ Run: python -m src.models.poisson_glm
 
 import pandas as pd
 from sklearn.linear_model import PoissonRegressor
-from src.models.common import FEATURE_COLS
+from src.models.common import FEATURE_COLS, ot_sample_weight
 from src.validate.walk_forward import walk_forward_evaluate, score_predictions
 
 from sklearn.preprocessing import StandardScaler
@@ -19,8 +19,13 @@ def fit_poisson(train: pd.DataFrame) -> dict:
     X_filled = X.fillna(means)
     scaler = StandardScaler().fit(X_filled)
     X_scaled = scaler.transform(X_filled)
-    home_model = PoissonRegressor(max_iter=300).fit(X_scaled, train["home_score"])
-    away_model = PoissonRegressor(max_iter=300).fit(X_scaled, train["away_score"])
+    w = ot_sample_weight(train)  # C5: halve historical overtime games
+    home_model = PoissonRegressor(max_iter=300).fit(
+        X_scaled, train["home_score"], sample_weight=w
+    )
+    away_model = PoissonRegressor(max_iter=300).fit(
+        X_scaled, train["away_score"], sample_weight=w
+    )
     return {
         "home_model": home_model,
         "away_model": away_model,

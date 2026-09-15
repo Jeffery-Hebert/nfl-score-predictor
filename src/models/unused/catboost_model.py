@@ -1,7 +1,7 @@
 """
 CatBoost: handles missing values natively.
 
-Run: python -m src.models.catboost_model
+Run: python -m src.models.unused.catboost_model
 """
 
 import pandas as pd

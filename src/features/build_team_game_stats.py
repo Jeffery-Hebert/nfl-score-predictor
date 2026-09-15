@@ -92,15 +92,28 @@ def build_defense_stats(pbp: pd.DataFrame) -> pd.DataFrame:
 
 def build_team_game_rows(schedules: pd.DataFrame) -> pd.DataFrame:
     schedules = normalize_team_codes(schedules, ["home_team", "away_team"])
+    # C3: neutral-site games (London/Mexico/Munich/Super Bowl) have no true home
+    # team, but were modelled as ordinary home games.
+    # C4: playoff games were mixed into the regular season with no marker.
+    # Both are known before kickoff.
+    schedules = schedules.copy()
+    schedules["is_neutral_site"] = (schedules["location"] == "Neutral").astype(int)
+    schedules["is_playoff"] = (schedules["game_type"] != "REG").astype(int)
     home = schedules.copy()
     home["team"], home["opponent"] = home["home_team"], home["away_team"]
     home["team_score"], home["opp_score"] = home["home_score"], home["away_score"]
     home["is_home"] = 1
+    # C1: nflverse ships correct rest days (max 16, correct across season
+    # boundaries). The pipeline used to recompute it as gameday.diff(), which
+    # reported up to 260 "rest days" across an offseason -- a number that does
+    # not describe rest in any football sense.
+    home["rest_days"] = home["home_rest"]
 
     away = schedules.copy()
     away["team"], away["opponent"] = away["away_team"], away["home_team"]
     away["team_score"], away["opp_score"] = away["away_score"], away["home_score"]
     away["is_home"] = 0
+    away["rest_days"] = away["away_rest"]
 
     keep_cols = [
         "game_id",
@@ -112,6 +125,9 @@ def build_team_game_rows(schedules: pd.DataFrame) -> pd.DataFrame:
         "team_score",
         "opp_score",
         "is_home",
+        "rest_days",
+        "is_neutral_site",
+        "is_playoff",
     ]
     return pd.concat([home[keep_cols], away[keep_cols]], ignore_index=True)
 

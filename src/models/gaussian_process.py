@@ -17,6 +17,10 @@ KERNEL = ConstantKernel(1.0) * RBF(length_scale=1.0) + WhiteKernel(noise_level=1
 
 
 def fit_gp(train: pd.DataFrame) -> dict:
+    # C5 note: sklearn's GaussianProcessRegressor.fit() takes no sample_weight,
+    # so the overtime down-weighting applied in linear.py and poisson_glm.py
+    # cannot be applied here. Left unweighted deliberately rather than dropping
+    # rows, which would change the model rather than re-weight it.
     X = train[FEATURE_COLS]
     means = X.mean()
     X_filled = X.fillna(means)

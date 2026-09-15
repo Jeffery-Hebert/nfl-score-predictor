@@ -4,7 +4,7 @@ to a score pair via the average score differential among similar past
 predicted-probability buckets. Not a natural fit for score prediction,
 but included per spec.
 
-Run: python -m src.models.logistic
+Run: python -m src.models.unused.logistic
 """
 
 import pandas as pd

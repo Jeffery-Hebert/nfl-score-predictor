@@ -3,6 +3,6 @@ data/raw/
 data/processed/
 __pycache__/
 *.pyc
-.pytensor/catboost_info/
+.pytensor/
 catboost_info/
 .pytest_cache/

@@ -38,7 +38,7 @@ def make_team_history(gamedays, seasons, weeks, team="FAKE", **asserted_stats):
     """
     n = len(gamedays)
     for name, values in asserted_stats.items():
-        if name not in STAT_COLS:
+        if name not in STAT_COLS and name != "rest_days":
             raise ValueError(
                 f"{name!r} is not in STAT_COLS -- check the name, or add it to "
                 f"src/features/build_rolling_features.py first"
@@ -53,6 +53,9 @@ def make_team_history(gamedays, seasons, weeks, team="FAKE", **asserted_stats):
             "season": seasons,
             "week": weeks,
             "gameday": pd.to_datetime(gamedays),
+            # C1: rest_days now arrives from schedules via build_team_game_stats
+            # and is passed through, not recomputed. 7 = an ordinary week.
+            "rest_days": asserted_stats.pop("rest_days", [7] * n),
         }
     )
     for col in STAT_COLS:

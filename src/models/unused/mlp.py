@@ -2,7 +2,7 @@
 MLP (neural network): small architecture given ~1,400-1,800 training rows
 per fold. Requires scaling (iterative optimizer, same reason as Poisson).
 
-Run: python -m src.models.mlp
+Run: python -m src.models.unused.mlp
 """
 
 import pandas as pd

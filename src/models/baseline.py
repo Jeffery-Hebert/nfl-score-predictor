@@ -11,16 +11,43 @@ Run: python src/models/baseline.py
 
 import pandas as pd
 from pathlib import Path
+from src.models.common import ot_sample_weight
 from src.validate.walk_forward import walk_forward_evaluate, score_predictions
 
 
 def fit_baseline(train: pd.DataFrame) -> dict:
-    home_field_adj = (train["home_score"] - train["away_score"]).mean()
+    """Learn the home-field edge from the training fold.
+
+    C3: neutral-site games (London, Mexico, Munich, Super Bowl) have no home
+    team, so including them drags the estimate toward zero and, worse, the
+    adjustment then gets applied TO them at prediction time. They are excluded
+    from the estimate and receive no adjustment below.
+
+    C5: historical overtime games are down-weighted -- an extra period inflates
+    the final margin in a way no pregame quantity predicts.
+    """
+    import numpy as np
+
+    fit_rows = train
+    if "is_neutral_site" in train.columns:
+        fit_rows = train[train["is_neutral_site"] == 0]
+        if fit_rows.empty:
+            fit_rows = train
+
+    margin = fit_rows["home_score"] - fit_rows["away_score"]
+    w = ot_sample_weight(fit_rows)
+    home_field_adj = float(
+        np.average(margin, weights=w) if w is not None else margin.mean()
+    )
     return {"home_field_adj": home_field_adj}
 
 
 def predict_baseline(model: dict, test: pd.DataFrame):
-    adj = model["home_field_adj"]
+    # C3: a neutral-site game gets no home-field adjustment.
+    if "is_neutral_site" in test.columns:
+        adj = model["home_field_adj"] * (1 - test["is_neutral_site"])
+    else:
+        adj = model["home_field_adj"]
     home_pred = (
         0.5 * test["home_pregame_team_score"]
         + 0.5 * test["away_pregame_opp_score"]

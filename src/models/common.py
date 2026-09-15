@@ -25,6 +25,38 @@ BASE_FEATURE_COLS = [
     "prior_games_played",
 ]
 
-FEATURE_COLS = [f"home_{c}" for c in BASE_FEATURE_COLS] + [
-    f"away_{c}" for c in BASE_FEATURE_COLS
-]
+# Game-level context that is not per-team, so it is not home_/away_ prefixed.
+# Both are known before kickoff (schedules.location / schedules.game_type).
+#   C3 -- neutral-site games have no true home team but were modelled as
+#         ordinary home games (50 games: London, Mexico, Munich, Super Bowl).
+#   C4 -- playoff games were mixed into the regular season unmarked (89 games).
+GAME_FEATURE_COLS = ["is_neutral_site", "is_playoff"]
+
+FEATURE_COLS = (
+    [f"home_{c}" for c in BASE_FEATURE_COLS]
+    + [f"away_{c}" for c in BASE_FEATURE_COLS]
+    + GAME_FEATURE_COLS
+)
+
+# C5: NOT a feature. went_to_ot is 0% populated before kickoff, so using it as
+# a model input would be target leakage. It exists only as a training-side
+# sample weight -- see ot_sample_weight() below.
+OT_TRAINING_COL = "went_to_ot"
+OT_SAMPLE_WEIGHT = 0.5  # historical OT games count half when fitting
+
+
+def ot_sample_weight(train):
+    """Down-weight historical overtime games when fitting.
+
+    Leakage-safe: reads the OT status of games already played, which is fully
+    known at fit time, and never consults the row being predicted. An extra
+    period adds scoring no pregame feature can anticipate, so those inflated
+    finals otherwise pull the fitted coefficients around.
+
+    Returns None when the column is absent, so callers degrade gracefully.
+    """
+    import numpy as np
+
+    if OT_TRAINING_COL not in train.columns:
+        return None
+    return np.where(train[OT_TRAINING_COL] == 1, OT_SAMPLE_WEIGHT, 1.0)
