@@ -144,6 +144,134 @@ metrics; slope is calibration (1.0 = perfect, >1 = compressed toward the mean).
 Poisson. The significant results above depend on the full 1426-game set. These
 effects are near the resolution limit of the available data.
 
+## Data Source Survey (2026-09-15)
+
+What is available free via `nflreadpy`, and what the operator has ruled in or out.
+
+**Ruled OUT by the operator, with reasons worth preserving:**
+
+- **Weather.** Training on ACTUAL weather and predicting on FORECAST weather is
+  a train/serve mismatch: the model would learn a relationship with truth and
+  then be fed a noisy estimate of it. Confirmed empirically -- `temp` and `wind`
+  are 0% populated before kickoff, so there is no forecast in this data at all.
+  Only usable if a genuine forecast feed is added, and even then the historical
+  training rows would need forecasts, not actuals, to match serve conditions.
+  `roof` (dome/outdoors) IS 84% pre-game and is static stadium context rather
+  than weather, so it remains available if wanted.
+- **Betting market data.** `spread_line`, `total_line`, moneylines and odds are
+  all present in schedules.parquet and must NEVER enter training. Permitted use
+  is side-by-side comparison only. `src/features/build_advanced_team_stats.py`
+  keeps a FORBIDDEN_MARKET_COLS list and prints what it is refusing to read;
+  note that pbp also carries `vegas_wp`/`vegas_wpa`, which are market-derived
+  and must not be used -- the project uses nflfastR's `wp`, modelled from game
+  state (score, time, field position, timeouts) only.
+- **Referee assignments.** `load_officials` exists but is post-hoc. Real
+  assignments leak Tuesday via unofficial sources (FootballZebras); an official
+  pre-game feed does not exist. Weak expected signal for the scraping cost and
+  fragility. Not pursued.
+
+**Ruled IN and verified feasible -- injuries.**
+`nflreadpy.load_injuries()` covers 2019-2026 (40,386 rows) with official
+`report_status` (Out / Doubtful / Questionable), position, player id, and a
+`date_modified` timestamp. Leakage-checked against kickoff:
+
+  - 99.94% of rows published BEFORE kickoff
+  - median lead time 49.4 hours (the Friday report before a Sunday game)
+  - only 22 rows of 34,119 land after kickoff -- filter on
+    `date_modified < kickoff` rather than trusting the week key
+  - a QB is ruled Out in 240 games, 10.8% of the sample
+
+This closes the long-standing "no injury/inactive data source" gap in this
+document. NOT yet built into features -- see the feature-saturation finding
+below, which says the estimator must be fixed before more features are added.
+
+**Also available, unexplored:** `load_depth_charts` (a candidate answer to the
+open "live starting QB" problem), `load_snap_counts` (would let injuries be
+weighted by a player's recent snap share, so a starter out counts and a
+4th-stringer does not), `load_nextgen_stats`, `load_pfr_advstats`,
+`load_participation` (personnel groupings), `load_ftn_charting`.
+
+## The Model Was Feature-Saturated, Not Feature-Starved (2026-09-15)
+
+The most useful finding of this line of work, and it inverts the working
+assumption that the model needed more information.
+
+**What was tried.** `src/features/build_advanced_team_stats.py` builds four
+families of metrics from play-by-play already on disk, each with a football
+reason rather than a "throw it in" reason:
+
+  PACE/VOLUME     plays, drives, plays per drive, seconds per play, no-huddle
+                  rate, pass rate over expected. Points = efficiency x
+                  POSSESSIONS, and the production feature set carried no volume
+                  term at all -- a genuine structural gap for predicting a
+                  score rather than a margin.
+  COMPETITIVE     EPA recomputed over plays with 0.20 < wp < 0.80, stripping
+                  prevent-defense garbage time out of the efficiency estimate.
+                  Uses nflfastR `wp` (game state); never `vegas_wp`.
+  TURNOVER LUCK   fumbles forced (persists) separated from fumbles recovered
+                  (~coin flip), so a model can weight skill and discount luck.
+  SPECIAL TEAMS   field-goal conversion -- absent from the feature set entirely.
+
+**Result: every family made Linear worse, monotonically with feature count.**
+
+  base 9.4110 | +PACE 9.4359 | +COMPETITIVE 9.4362 | +SPECIAL 9.4348
+  +TURNOVER 9.4553 | +PACE+COMPETITIVE 9.4603 | +ALL (54 feats) 9.5302
+
+That is an overfitting signature, not evidence the football is wrong.
+
+**Diagnosis.** `src/models/linear.py` was sklearn `LinearRegression` -- ordinary
+least squares, NO regularization -- on 18 correlated features with ~1,900
+training rows. Meanwhile `PoissonRegressor` defaults to `alpha=1.0` and is
+already regularized, and degraded far less under the same features (+PACE
+9.4104 vs Linear's 9.4359). That asymmetry is the tell, and it also explains
+why Poisson had been quietly beating Linear on the benchmark all along.
+
+**Confirmed by bootstrap** (5,000 resamples over games, pooled home+away):
+
+| variant | delta vs production OLS | 95% CI | verdict |
+|---|---|---|---|
+| Ridge a=1, base | -0.0047 | [-0.0094, -0.0004] | **BETTER (real)** |
+| Ridge a=10, base | -0.0108 | [-0.0232, +0.0014] | noise |
+| Ridge a=100, base | -0.0141 | [-0.0336, +0.0051] | noise |
+| RidgeCV, base | -0.0067 | [-0.0279, +0.0142] | noise |
+| **OLS, base+advanced** | **+0.1193** | **[+0.0585, +0.1800]** | **WORSE (real)** |
+| RidgeCV, base+advanced | +0.0217 | [-0.0222, +0.0641] | noise |
+
+Note the statistical subtlety: a=1 clears significance because it barely
+changes the predictions, so the paired differences are small and consistent.
+a=100 has the larger effect but a wider interval. Significance here measures
+reliability of the difference, not which alpha is best.
+
+**Adopted:** ridge in place of OLS in `src/models/linear.py`. Justified on two
+grounds -- OLS is the wrong estimator for p=18, n~1900 with correlated
+features regardless of scoreboard, and every alpha tested improved on it.
+
+**Deliberately NOT adopted: alpha = 100**, despite scoring best of everything
+tried (9.3971, nearly matching Poisson). That number is the test-set optimum,
+and taking it would be tuning a hyperparameter on the test set -- exactly the
+error walk-forward evaluation exists to prevent. Production uses `RidgeCV` with
+a `TimeSeriesSplit` inside each training fold, which scores worse (9.4045) and
+is the only defensible choice. If anyone later "improves" this by hardcoding
+alpha=100, that is a regression in method even though the number will look
+better.
+
+**Rejected: all four advanced-metric families.** Under regularization they stop
+being actively harmful but still add nothing (RidgeCV+advanced: +0.0217, CI
+spans zero). The information is either already carried by the existing
+efficiency features or too noisy at this sample size. The builder is retained
+at `src/features/build_advanced_team_stats.py` for future use; it is NOT part
+of `build_all.py` and nothing in production reads it.
+
+**Consequence for sequencing.** Injuries are the largest genuine information
+gap and are now verified feasible, but adding them to a saturated feature set
+would produce a misleading null result and burn the idea. The estimator had to
+be fixed first. Any future feature work should be evaluated under the
+regularized model, and should prefer COMPRESSING information into few strong
+features over adding many raw ones.
+
+**Benchmark after adopting ridge** (n=1426, mean of home/away RMSE):
+  baseline 9.4415 | linear 9.4045 (was 9.4110) | poisson 9.3920
+
 ## Real, Unresolved Gaps (Worth Pursuing With New Data or New Direction, Not New Cuts of Old Data)
 
 - **No injury/inactive/depth-chart data source.** This is the single most-cited real gap across every session — the model has no visibility into who is actually playing, which is the dominant driver of the QB-identity and finale-week findings above. Solving this requires a new data source, not new feature engineering on existing play-by-play.
