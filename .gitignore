@@ -6,3 +6,9 @@ __pycache__/
 .pytensor/
 catboost_info/
 .pytest_cache/
+
+# Generated view of a prediction. The .parquet beside it is the record that
+# matters and IS tracked -- a timestamped, tamper-evident note of what the model
+# said before the games were played, which is the whole point of forward testing.
+# The HTML is a rendering of that record and regenerates with --html.
+data/predictions/*.html
