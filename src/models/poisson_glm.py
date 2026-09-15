@@ -25,7 +25,11 @@ Run: python -m src.models.poisson_glm
 
 import pandas as pd
 from sklearn.linear_model import PoissonRegressor
-from src.models.common import FEATURE_COLS, ot_sample_weight
+from src.models.common import (
+    FEATURE_COLS,
+    ot_sample_weight,
+    recent_residual_offset,
+)
 from src.validate.walk_forward import walk_forward_evaluate, score_predictions
 
 from sklearn.preprocessing import StandardScaler
@@ -48,18 +52,26 @@ def fit_poisson(train: pd.DataFrame) -> dict:
     away_model = PoissonRegressor(alpha=POISSON_ALPHA, max_iter=300).fit(
         X_scaled, train["away_score"], sample_weight=w
     )
+    off_h, off_a = recent_residual_offset(
+        train, home_model.predict(X_scaled), away_model.predict(X_scaled)
+    )
     return {
         "home_model": home_model,
         "away_model": away_model,
         "means": means,
         "scaler": scaler,
+        "off_h": off_h,
+        "off_a": off_a,
     }
 
 
 def predict_poisson(model: dict, test: pd.DataFrame):
     X = test[FEATURE_COLS].fillna(model["means"])
     X_scaled = model["scaler"].transform(X)
-    return model["home_model"].predict(X_scaled), model["away_model"].predict(X_scaled)
+    return (
+        model["home_model"].predict(X_scaled) - model["off_h"],
+        model["away_model"].predict(X_scaled) - model["off_a"],
+    )
 
 
 def main():

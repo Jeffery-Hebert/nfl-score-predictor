@@ -77,3 +77,57 @@ def ot_sample_weight(train):
     if OT_TRAINING_COL not in train.columns:
         return None
     return np.where(train[OT_TRAINING_COL] == 1, OT_SAMPLE_WEIGHT, 1.0)
+
+
+# ---------------------------------------------------------------- bias drift
+
+# The league's scoring environment moves, and the models train on every prior
+# season at equal weight, so they inherit a stale picture of it:
+#
+#     era          avg away score    home-field edge
+#     2019-2021        23.16             +0.74
+#     2024-2026        21.98             +2.12
+#
+# 2019 and 2020 were the empty-stadium seasons, where home-field advantage
+# essentially vanished (+0.04, +0.17). Carrying that forward made every model
+# over-predict away scores by about +0.75 while home scores stayed unbiased.
+#
+# Measured at 285 games (~1 NFL season) by
+# src/experiments/test_bias_correction.py:
+#
+#     model     away bias before -> after     margin bias before -> after
+#     linear        +0.780  ->  +0.262           -0.883  ->  -0.183
+#     poisson       +0.741  ->  +0.256           -0.894  ->  -0.199
+#
+# RMSE is unchanged either way (every variant's bootstrap CI spans zero), so
+# this buys calibration rather than accuracy -- which is the point, since the
+# objective is the exact score and the exact margin, not the spread.
+#
+# Also tested and NOT adopted: down-weighting old TRAINING games
+# (test_training_recency.py). It reduces the bias too, but by discarding data:
+# anything under a ~2-season half-life is measurably WORSE on RMSE, and at a
+# 2-season half-life it only removes 20% of the bias. Correcting the offset
+# directly is strictly better -- it keeps every training row.
+BIAS_CORRECTION_GAMES = 285
+
+
+def recent_residual_offset(train, pred_home, pred_away, n_games=BIAS_CORRECTION_GAMES):
+    """How much the model currently over-predicts, per side, in points.
+
+    Fits are least-squares, so residuals sum to zero over the WHOLE training
+    set. This looks at a recent SUBSET, which is where drift shows up.
+
+    Leakage-safe: reads only training rows and their own dates. The game being
+    predicted is never involved.
+
+    Returns (home_offset, away_offset) to SUBTRACT from predictions.
+    """
+    import numpy as np
+
+    if "gameday" not in train.columns or len(train) == 0:
+        return 0.0, 0.0
+    k = min(n_games, len(train))
+    recent = np.argsort(train["gameday"].to_numpy())[-k:]
+    home_off = float((pred_home - train["home_score"].to_numpy(float))[recent].mean())
+    away_off = float((pred_away - train["away_score"].to_numpy(float))[recent].mean())
+    return home_off, away_off

@@ -10,7 +10,7 @@ import pandas as pd
 from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import RBF, WhiteKernel, ConstantKernel
 from sklearn.preprocessing import StandardScaler
-from src.models.common import FEATURE_COLS
+from src.models.common import FEATURE_COLS, recent_residual_offset
 from src.validate.walk_forward import walk_forward_evaluate, score_predictions
 
 KERNEL = ConstantKernel(1.0) * RBF(length_scale=1.0) + WhiteKernel(noise_level=1.0)
@@ -33,18 +33,26 @@ def fit_gp(train: pd.DataFrame) -> dict:
     away_model = GaussianProcessRegressor(
         kernel=KERNEL, normalize_y=True, random_state=42
     ).fit(X_scaled, train["away_score"])
+    off_h, off_a = recent_residual_offset(
+        train, home_model.predict(X_scaled), away_model.predict(X_scaled)
+    )
     return {
         "home_model": home_model,
         "away_model": away_model,
         "means": means,
         "scaler": scaler,
+        "off_h": off_h,
+        "off_a": off_a,
     }
 
 
 def predict_gp(model: dict, test: pd.DataFrame):
     X = test[FEATURE_COLS].fillna(model["means"])
     X_scaled = model["scaler"].transform(X)
-    return model["home_model"].predict(X_scaled), model["away_model"].predict(X_scaled)
+    return (
+        model["home_model"].predict(X_scaled) - model["off_h"],
+        model["away_model"].predict(X_scaled) - model["off_a"],
+    )
 
 
 def main():

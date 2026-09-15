@@ -34,7 +34,11 @@ from sklearn.linear_model import RidgeCV
 from sklearn.model_selection import TimeSeriesSplit
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
-from src.models.common import FEATURE_COLS, ot_sample_weight
+from src.models.common import (
+    FEATURE_COLS,
+    ot_sample_weight,
+    recent_residual_offset,
+)
 from src.validate.walk_forward import walk_forward_evaluate, score_predictions
 
 ALPHAS = np.logspace(-2, 4, 25)
@@ -59,12 +63,25 @@ def fit_linear(train: pd.DataFrame) -> dict:
     away_model = _make_model().fit(
         X_filled, train["away_score"], ridgecv__sample_weight=w
     )
-    return {"home_model": home_model, "away_model": away_model, "means": means}
+    # Correct the scoring-environment drift -- see recent_residual_offset.
+    off_h, off_a = recent_residual_offset(
+        train, home_model.predict(X_filled), away_model.predict(X_filled)
+    )
+    return {
+        "home_model": home_model,
+        "away_model": away_model,
+        "means": means,
+        "off_h": off_h,
+        "off_a": off_a,
+    }
 
 
 def predict_linear(model: dict, test: pd.DataFrame):
     X = test[FEATURE_COLS].fillna(model["means"])
-    return model["home_model"].predict(X), model["away_model"].predict(X)
+    return (
+        model["home_model"].predict(X) - model["off_h"],
+        model["away_model"].predict(X) - model["off_a"],
+    )
 
 
 def main():
