@@ -126,16 +126,46 @@ td.final{font-weight:600}
 .err.miss{color:var(--miss)}
 .dash{color:var(--ink-faint)}
 
+/* phone layout -- the graded table is seven columns wide and sideways
+   scrolling to read a score is miserable, so narrow screens get one card
+   per game instead */
+.cards{display:none;flex-direction:column;gap:10px}
+.gcard{background:var(--surface);border:1px solid var(--rule);border-radius:3px;
+  padding:13px 15px;box-shadow:var(--shadow)}
+.gcard h3{font-family:"Barlow Condensed",sans-serif;font-size:21px;font-weight:600;
+  margin:0;letter-spacing:.01em}
+.gcard .when{font-size:11px;color:var(--ink-faint);margin-bottom:10px}
+.gcard .fin{font-family:"IBM Plex Mono",monospace;font-size:19px;font-weight:600;
+  font-variant-numeric:tabular-nums;margin:0 0 10px;padding-bottom:9px;
+  border-bottom:1px solid var(--rule)}
+.gcard .fin span{font-size:10px;letter-spacing:.11em;text-transform:uppercase;
+  color:var(--ink-faint);font-weight:600;font-family:"IBM Plex Sans",sans-serif;
+  margin-right:9px;vertical-align:1px}
+.grow{display:flex;justify-content:space-between;align-items:baseline;gap:10px;
+  padding:5px 0;border-bottom:1px solid var(--rule-soft)}
+.grow:last-child{border-bottom:0}
+.grow .k{font-size:11px;letter-spacing:.09em;text-transform:uppercase;
+  color:var(--ink-faint);font-weight:600}
+.grow .v{font-family:"IBM Plex Mono",monospace;font-variant-numeric:tabular-nums;
+  font-size:15px;font-weight:500;text-align:right}
+.grow .v .err{display:inline;margin-left:7px;font-size:11px}
+.grow.mk{background:color-mix(in srgb,var(--accent-soft) 40%,transparent);
+  margin:7px -15px -13px;padding:9px 15px;border-bottom:0;border-radius:0 0 2px 2px}
+
 .foot{margin-top:30px;padding-top:18px;border-top:1px solid var(--rule);
   font-size:12.5px;line-height:1.6;color:var(--ink-faint);max-width:78ch}
 .foot p{margin:0 0 9px}
 .foot code{font-family:"IBM Plex Mono",monospace;font-size:12px;
   background:var(--surface-2);padding:1px 5px;border-radius:2px;color:var(--ink-soft)}
 
+@media (max-width:760px){
+  .scroll{display:none}
+  .cards{display:flex}
+  .mast .sub{margin-left:0;text-align:left;width:100%}
+  .prov div{padding-right:16px;margin-right:16px}
+}
 @media (max-width:640px){
   .wrap{padding-block:26px 44px}
-  .mast .sub{margin-left:0;text-align:left}
-  .prov div{padding-right:16px;margin-right:16px}
 }
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 </style>
@@ -160,6 +190,8 @@ td.final{font-weight:600}
       <tbody id="body"></tbody>
     </table>
   </div>
+
+  <div class="cards" id="cards"></div>
 
   <div class="foot">
     <p><b>Scores read away&#8211;home</b>, rounded to one decimal. The models predict
@@ -401,11 +433,62 @@ function careerLines(){
   });
 }
 
+function gradeSpan(gr){
+  const s = document.createElement("span");
+  s.className = "err " + (gr.winner_correct ? "hit" : "miss");
+  s.textContent = `${gr.winner_correct ? "✓" : "✗"} ${signed(gr.margin_err)}`;
+  return s;
+}
+
+function drawCards(w){
+  document.getElementById("cards").replaceChildren(...w.games.map(g => {
+    const c = document.createElement("div");
+    c.className = "gcard";
+    const h = document.createElement("h3");
+    h.textContent = `${g.away} @ ${g.home}`;
+    const when = document.createElement("div");
+    when.className = "when"; when.textContent = g.kickoff;
+    c.append(h, when);
+
+    if (g.actual){
+      const f = document.createElement("div");
+      f.className = "fin";
+      const tag = document.createElement("span"); tag.textContent = "Final";
+      f.append(tag, document.createTextNode(`${g.actual.away}–${g.actual.home}`));
+      c.append(f);
+    }
+
+    MODELS.forEach(([k,label]) => {
+      const p = g.models[k];
+      if (!p) return;
+      const row = document.createElement("div");
+      row.className = "grow";
+      const kk = document.createElement("span"); kk.className = "k"; kk.textContent = label;
+      const vv = document.createElement("span"); vv.className = "v";
+      vv.append(document.createTextNode(`${fmt(p.away)}–${fmt(p.home)}`));
+      const gr = g.grade && g.grade[k];
+      if (gr) vv.append(gradeSpan(gr));
+      row.append(kk, vv);
+      c.append(row);
+    });
+
+    const row = document.createElement("div");
+    row.className = "grow mk";
+    const kk = document.createElement("span"); kk.className = "k"; kk.textContent = "Market";
+    const vv = document.createElement("span"); vv.className = "v";
+    vv.textContent = g.market ? `${fmt(g.market.away)}–${fmt(g.market.home)}` : "no line";
+    row.append(kk, vv);
+    c.append(row);
+    return c;
+  }));
+}
+
 function render(){
   const w = DATA.weeks[idx];
   document.getElementById("sub").replaceChildren(...careerLines());
   document.title = `NFL Score Ledger — ${w.season} Week ${w.week}`;
-  drawRail(); drawProv(w); drawLede(w); drawFlag(w); drawCard(w); drawHead(w); drawBody(w);
+  drawRail(); drawProv(w); drawLede(w); drawFlag(w); drawCard(w);
+  drawHead(w); drawBody(w); drawCards(w);
 }
 
 window.addEventListener("hashchange", () => { fromHash(); render(); });
