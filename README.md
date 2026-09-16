@@ -269,33 +269,80 @@ python -m src.predict.predict_week --html
 ```
 
 That fits every model on all completed games, predicts the next unplayed week,
-prints a table, and writes two files:
+prints a table, and writes:
 
 ```
-data/predictions/2026_wk02.parquet   the numbers, for further analysis
-data/predictions/2026_wk02.html      a page you can open in any browser
+data/predictions/2026_wk02.parquet   this week's numbers, one file per week
+data/predictions/index.html          the ledger: every week, graded
 ```
-
-**To view it**, just open the HTML file — no server, no build step, no internet
-needed beyond the web fonts (it falls back to system fonts offline):
-
-```bash
-firefox data/predictions/2026_wk02.html
-```
-
-or `xdg-open` on Linux, `open` on macOS, or double-click it in a file manager.
-The page is one self-contained file: the predictions are baked into it, so you
-can email it, copy it to a phone, or keep it as a record of what the model said
-before the games were played.
 
 Pick a specific week with `--season 2026 --week 2`. Add `--json out.json` if you
 want the raw numbers somewhere else.
 
-**It will refuse to run on stale data.** If the newest completed game is more
-than three weeks before kickoff, it stops and tells you which commands to run
-— predicting Week 2 from a table that never received Week 1 produces confident,
-wrong numbers and no error message, so the script treats that as a failure
-rather than a warning.
+### The ledger
+
+The page is not a snapshot of one week. It reads **every** prediction file on
+disk and shows them all, opening on the most recent:
+
+- a week that hasn't been played yet shows the four model predictions next to
+  the market's implied score;
+- a week that has been played shows the same predictions with the **final score
+  beside them**, how far off each model was, and whether it picked the winner;
+- the tab strip along the top pages through every week on file, each tab
+  carrying its own record (`12–4 · 7.62 MAE`). Arrow keys work too.
+
+Nothing about a prediction is ever rewritten when results arrive. Each week's
+parquet is written once, before kickoff, and read back unchanged — the grades
+are computed fresh at render time from the final scores. That is the whole
+point of keeping the parquet files in git: they are a dated record of what the
+model claimed *beforehand*, which is the only kind of forecast worth counting.
+
+Weeks that were predicted after the games were played are labelled **backfilled**
+on the page. They are still honest out-of-sample numbers — the fit never sees a
+game that hasn't kicked off — but nobody was stopping you from regenerating them
+until they looked good, so they don't carry the same weight.
+
+Rebuild the page any time new results land, without re-predicting anything:
+
+```bash
+python -m src.predict.build_report
+```
+
+That takes about a second, because it only re-reads files. Re-running
+`predict_week` is the slow part (it refits every model, roughly 40 seconds) and
+is only needed when you want a *new* week predicted.
+
+### Viewing it
+
+Open the file. No server, no build step, no internet needed beyond the web fonts
+(it falls back to system fonts offline):
+
+```bash
+firefox data/predictions/index.html
+```
+
+or `xdg-open` on Linux, `open` on macOS, or double-click it in a file manager.
+`python -m src.predict.build_report --open` builds it and launches your browser
+in one step. Everything is baked into the one file, so you can email it or copy
+it to a phone and it still works.
+
+### It will refuse to run on stale data
+
+Predicting Week 2 from a table that never received Week 1 produces confident,
+wrong numbers and no error message, so `predict_week` treats that as a failure
+rather than a warning. It checks **completeness, not the calendar**: it asks
+whether any game that has already been played is missing from the training
+table, and tells you which fix you need —
+
+- the score exists in `schedules.parquet` but not in the model table → rebuild
+  (`python -m src.features.build_all`);
+- a game has kicked off and has no score anywhere → re-pull first.
+
+(The earlier version of this check compared dates and refused anything older
+than three weeks. That was wrong in the worst possible place: every Week 1 sits
+about 210 days after the previous Super Bowl, so a perfectly current table looked
+seven months stale and the guard would have blocked opening weekend outright.
+`tests/test_prediction_freshness.py` now pins that case down.)
 
 All predicted scores are rounded to one decimal place. The models' typical
 error is over nine points, so anything finer would be noise dressed as
@@ -314,12 +361,15 @@ src/
   features/    turns raw data into model inputs. build_all.py runs them in order.
   models/      the prediction models themselves
     unused/    models that were built, measured, and shelved — kept on purpose
+  predict/     forecasts for games that haven't happened, and the ledger page
   validate/    the scoring harness, error analysis, calibration
   experiments/ one-off tests of "would this idea help?" — never touched by production
 tests/         correctness and leakage gates
 data/
   raw/         downloaded data (not in git)
   processed/   built features (not in git)
+  predictions/ one parquet per predicted week — IN git on purpose, as a dated
+               record of what was claimed before kickoff. index.html is not.
 ```
 
 Two conventions worth knowing:

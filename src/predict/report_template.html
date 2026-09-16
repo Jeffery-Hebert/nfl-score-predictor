@@ -1,4 +1,4 @@
-<title>NFL Week 2 Scoreboard</title>
+<title>NFL Score Ledger</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
@@ -8,7 +8,7 @@
   --ink:#141821; --ink-soft:#5B6575; --ink-faint:#8A94A3;
   --rule:#DCE1E8; --rule-soft:#E8ECF1;
   --accent:#B06E00; --accent-soft:#F5E4C4;
-  --over:#0F6E62; --under:#A8442A;
+  --hit:#0F6E62; --miss:#A8442A;
   --shadow:0 1px 2px rgba(20,24,33,.06);
 }
 @media (prefers-color-scheme:dark){
@@ -17,7 +17,7 @@
     --ink:#E8ECF2; --ink-soft:#9AA5B4; --ink-faint:#6C7788;
     --rule:#262F3B; --rule-soft:#1F2731;
     --accent:#F0B429; --accent-soft:#3A2F14;
-    --over:#3FBFAC; --under:#E2765A;
+    --hit:#3FBFAC; --miss:#E2765A;
     --shadow:0 1px 2px rgba(0,0,0,.4);
   }
 }
@@ -26,7 +26,7 @@
   --ink:#E8ECF2; --ink-soft:#9AA5B4; --ink-faint:#6C7788;
   --rule:#262F3B; --rule-soft:#1F2731;
   --accent:#F0B429; --accent-soft:#3A2F14;
-  --over:#3FBFAC; --under:#E2765A;
+  --hit:#3FBFAC; --miss:#E2765A;
   --shadow:0 1px 2px rgba(0,0,0,.4);
 }
 *{box-sizing:border-box}
@@ -36,35 +36,71 @@ body{
   margin:0; padding-inline:20px; padding-block:0;
   -webkit-font-smoothing:antialiased;
 }
-.wrap{max-width:1140px;margin:0 auto;padding-block:40px 64px}
+.wrap{max-width:1180px;margin:0 auto;padding-block:40px 64px}
 
 /* masthead */
 .mast{display:flex;flex-wrap:wrap;align-items:flex-end;gap:20px;
-  border-bottom:2px solid var(--ink);padding-bottom:14px;margin-bottom:0}
+  border-bottom:2px solid var(--ink);padding-bottom:14px}
 .mast h1{
   font-family:"Barlow Condensed",system-ui,sans-serif;
-  font-weight:700;font-size:clamp(34px,6vw,54px);line-height:.95;
+  font-weight:700;font-size:clamp(32px,6vw,52px);line-height:.95;
   letter-spacing:-.01em;margin:0;text-wrap:balance;text-transform:uppercase;
 }
 .mast h1 em{font-style:normal;color:var(--accent)}
 .mast .sub{font-size:13px;color:var(--ink-soft);margin-left:auto;text-align:right;line-height:1.5}
 
+/* week rail */
+.rail{display:flex;gap:0;overflow-x:auto;border-bottom:1px solid var(--rule);
+  scrollbar-width:thin;padding-bottom:0}
+.rail button{
+  appearance:none;background:none;border:0;border-bottom:3px solid transparent;
+  font-family:"Barlow Condensed",sans-serif;font-weight:600;font-size:17px;
+  letter-spacing:.02em;text-transform:uppercase;color:var(--ink-faint);
+  padding:12px 15px 9px;cursor:pointer;white-space:nowrap;line-height:1.15;
+  display:flex;flex-direction:column;align-items:center;gap:2px;flex:0 0 auto;
+}
+.rail button:hover{color:var(--ink)}
+.rail button[aria-current="true"]{color:var(--ink);border-bottom-color:var(--accent)}
+.rail button:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+.rail .rec{font-family:"IBM Plex Mono",monospace;font-size:10px;font-weight:500;
+  letter-spacing:0;text-transform:none;font-variant-numeric:tabular-nums;color:var(--ink-faint)}
+.rail button[aria-current="true"] .rec{color:var(--accent)}
+.rail .rec.pend{font-style:italic}
+
 /* provenance */
-.prov{display:flex;flex-wrap:wrap;gap:0;border-bottom:1px solid var(--rule);margin-bottom:26px}
+.prov{display:flex;flex-wrap:wrap;gap:0;border-bottom:1px solid var(--rule);
+  margin-bottom:24px;padding-top:4px}
 .prov div{padding:11px 22px 11px 0;margin-right:22px;border-right:1px solid var(--rule-soft)}
-.prov div:last-child{border-right:0}
+.prov div:last-child{border-right:0;margin-right:0}
 .prov dt{font-size:10px;letter-spacing:.11em;text-transform:uppercase;color:var(--ink-faint);
   font-weight:600;margin:0 0 3px}
 .prov dd{margin:0;font-family:"IBM Plex Mono",monospace;font-size:14px;font-weight:500;
   font-variant-numeric:tabular-nums}
 
-.lede{max-width:66ch;font-size:15px;line-height:1.65;color:var(--ink-soft);margin:0 0 30px}
+.lede{max-width:66ch;font-size:15px;line-height:1.65;color:var(--ink-soft);margin:0 0 26px}
 .lede strong{color:var(--ink);font-weight:600}
+
+.flag{border-left:3px solid var(--accent);background:var(--accent-soft);
+  padding:11px 16px;margin:0 0 24px;font-size:13.5px;line-height:1.55;color:var(--ink);
+  max-width:72ch;border-radius:0 3px 3px 0}
+.flag b{font-weight:600}
+
+/* week scorecard */
+.card{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:1px;
+  background:var(--rule);border:1px solid var(--rule);margin:0 0 26px;border-radius:3px;
+  overflow:hidden}
+.card section{background:var(--surface);padding:14px 16px 15px}
+.card h3{font-family:"Barlow Condensed",sans-serif;text-transform:uppercase;
+  letter-spacing:.06em;font-size:13px;font-weight:600;margin:0 0 8px;color:var(--ink-soft)}
+.card .big{font-family:"IBM Plex Mono",monospace;font-size:25px;font-weight:600;
+  font-variant-numeric:tabular-nums;line-height:1;margin-bottom:5px}
+.card .note{font-size:11.5px;color:var(--ink-faint);line-height:1.4}
+.card section.best h3{color:var(--accent)}
 
 /* table */
 .scroll{overflow-x:auto;border:1px solid var(--rule);border-radius:3px;background:var(--surface);
   box-shadow:var(--shadow)}
-table{border-collapse:collapse;width:100%;min-width:980px}
+table{border-collapse:collapse;width:100%;min-width:900px}
 thead th{
   font-size:10px;letter-spacing:.11em;text-transform:uppercase;color:var(--ink-faint);
   font-weight:600;text-align:center;padding:13px 10px 9px;border-bottom:1px solid var(--rule);
@@ -72,197 +108,269 @@ thead th{
 }
 thead th.matchup{text-align:left;padding-left:18px}
 thead th.mkt{background:var(--accent-soft);color:var(--ink-soft)}
-thead th.lead{color:var(--ink)}
-tbody td{padding:12px 10px;border-bottom:1px solid var(--rule-soft);text-align:center;
+thead th.final{color:var(--ink)}
+tbody td{padding:11px 10px;border-bottom:1px solid var(--rule-soft);text-align:center;
   font-family:"IBM Plex Mono",monospace;font-variant-numeric:tabular-nums;font-size:15px}
 tbody tr:last-child td{border-bottom:0}
 tbody tr:nth-child(even) td{background:color-mix(in srgb,var(--surface-2) 45%,transparent)}
 td.matchup{text-align:left;padding-left:18px;font-family:"Barlow Condensed",sans-serif;
-  font-size:21px;font-weight:600;letter-spacing:.005em;white-space:nowrap}
-td.matchup .at{color:var(--ink-faint);font-weight:500;padding:0 3px}
-td.matchup .day{display:block;font-family:"IBM Plex Sans",sans-serif;font-size:11px;
-  font-weight:400;color:var(--ink-faint);letter-spacing:.02em;margin-top:1px}
-td.lead{font-size:18px;font-weight:600}
-td.soft{color:var(--ink-soft);font-size:14px}
+  font-size:19px;font-weight:600;letter-spacing:.01em;white-space:nowrap}
+td.matchup .dt{display:block;font-family:"IBM Plex Sans",sans-serif;font-size:11px;
+  font-weight:400;color:var(--ink-faint);letter-spacing:0;margin-top:1px}
 td.mkt{background:color-mix(in srgb,var(--accent-soft) 40%,transparent)}
-td.mkt.line{font-size:13px;color:var(--ink-soft)}
-td.mkt.implied{font-weight:600}
+tbody tr:nth-child(even) td.mkt{background:color-mix(in srgb,var(--accent-soft) 62%,transparent)}
+td.final{font-weight:600}
+.err{display:block;font-size:11px;margin-top:2px;letter-spacing:.01em}
+.err.hit{color:var(--hit)}
+.err.miss{color:var(--miss)}
+.dash{color:var(--ink-faint)}
 
-/* edge chip */
-.chip{display:inline-block;min-width:44px;padding:3px 7px;border-radius:2px;font-size:12px;
-  font-weight:600;font-family:"IBM Plex Mono",monospace}
-.chip.o{color:var(--over);background:color-mix(in srgb,var(--over) 13%,transparent)}
-.chip.u{color:var(--under);background:color-mix(in srgb,var(--under) 13%,transparent)}
-.chip.n{color:var(--ink-faint)}
+.foot{margin-top:30px;padding-top:18px;border-top:1px solid var(--rule);
+  font-size:12.5px;line-height:1.6;color:var(--ink-faint);max-width:78ch}
+.foot p{margin:0 0 9px}
+.foot code{font-family:"IBM Plex Mono",monospace;font-size:12px;
+  background:var(--surface-2);padding:1px 5px;border-radius:2px;color:var(--ink-soft)}
 
-/* mobile cards */
-.cards{display:none;flex-direction:column;gap:12px}
-.card{background:var(--surface);border:1px solid var(--rule);border-radius:3px;
-  padding:14px 16px;box-shadow:var(--shadow)}
-.card h3{font-family:"Barlow Condensed",sans-serif;font-size:22px;font-weight:600;margin:0 0 2px}
-.card .day{font-size:11px;color:var(--ink-faint);margin-bottom:11px}
-.row{display:flex;justify-content:space-between;align-items:baseline;gap:10px;
-  padding:6px 0;border-bottom:1px solid var(--rule-soft)}
-.row:last-child{border-bottom:0}
-.row .k{font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--ink-faint);font-weight:600}
-.row .v{font-family:"IBM Plex Mono",monospace;font-variant-numeric:tabular-nums;font-size:15px;font-weight:500}
-.row.mk{background:color-mix(in srgb,var(--accent-soft) 40%,transparent);
-  margin:6px -16px 0;padding:8px 16px;border-bottom:0}
-.row.mk + .row.mk{margin-top:0}
-
-/* notes */
-.notes{margin-top:34px;display:grid;grid-template-columns:repeat(auto-fit,minmax(255px,1fr));gap:22px}
-.note h4{font-size:11px;letter-spacing:.11em;text-transform:uppercase;color:var(--accent);
-  font-weight:600;margin:0 0 7px}
-.note p{margin:0;font-size:13.5px;line-height:1.6;color:var(--ink-soft)}
-.note p + p{margin-top:8px}
-.note code{font-family:"IBM Plex Mono",monospace;font-size:12.5px;
-  background:var(--surface-2);padding:1px 4px;border-radius:2px;color:var(--ink)}
-.warn{margin-top:26px;border-left:3px solid var(--under);padding:12px 0 12px 15px}
-.warn p{margin:0;font-size:13.5px;line-height:1.6;color:var(--ink-soft)}
-.warn strong{color:var(--ink);font-weight:600}
-
-@media (max-width:760px){
-  .scroll{display:none}
-  .cards{display:flex}
+@media (max-width:640px){
+  .wrap{padding-block:26px 44px}
+  .mast .sub{margin-left:0;text-align:left}
   .prov div{padding-right:16px;margin-right:16px}
-  .mast .sub{margin-left:0;text-align:left;width:100%}
 }
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 </style>
 
 <div class="wrap">
   <header class="mast">
-    <h1>Week&nbsp;2 <em>Score Board</em></h1>
+    <h1>NFL Score <em>Ledger</em></h1>
     <div class="sub" id="sub"></div>
   </header>
 
+  <nav class="rail" id="rail" aria-label="Week"></nav>
+
   <dl class="prov" id="prov"></dl>
 
-  <p class="lede">
-    Four models predict the <strong>exact final score</strong> of every Week 2 game. Each fits on
-    every completed game through the date below, then predicts forward &mdash; the same code the
-    backtest measured, so nothing here is produced by a separate path that could drift.
-    The market columns are shown for comparison only and are <strong>never model inputs</strong>.
-  </p>
+  <p class="lede" id="lede"></p>
+  <div id="flag"></div>
+  <div class="card" id="card"></div>
 
   <div class="scroll">
     <table>
-      <thead>
-        <tr>
-          <th class="matchup" rowspan="2">Matchup</th>
-          <th class="lead" rowspan="2">Combined</th>
-          <th colspan="3">Individual models</th>
-          <th class="mkt" colspan="2">Market (reference)</th>
-          <th rowspan="2">Edge</th>
-        </tr>
-        <tr>
-          <th>Linear</th><th>Poisson</th><th>Gaussian&nbsp;Proc.</th>
-          <th class="mkt">Line</th><th class="mkt">Implied score</th>
-        </tr>
-      </thead>
-      <tbody id="tbody"></tbody>
+      <thead><tr id="head"></tr></thead>
+      <tbody id="body"></tbody>
     </table>
   </div>
 
-  <div class="cards" id="cards"></div>
-
-  <div class="notes">
-    <div class="note">
-      <h4>Reading a row</h4>
-      <p>Scores are <strong>away&ndash;home</strong>, matching the matchup label. The combined model
-        is the average of the other three; it is the one to read first.</p>
-      <p><strong>Line</strong> is the closing spread and over/under. <strong>Implied score</strong>
-        converts that same line into a score pair &mdash; <code>(total ± spread) / 2</code> &mdash; so
-        the market can be read on the same scale as the models.</p>
-    </div>
-    <div class="note">
-      <h4>The edge column</h4>
-      <p>Combined margin minus the market's margin, in points. Teal means the model likes the
-        <em>home</em> side more than the market does; rust means it likes the <em>away</em> side more.</p>
-      <p>A large edge means the model and the market disagree &mdash; not that the model is right.</p>
-    </div>
-    <div class="note">
-      <h4>Known bias, now corrected</h4>
-      <p>Every model used to over-predict away scores by about <code>+0.78</code> points, because
-        training weighted the empty-stadium 2019&ndash;20 seasons &mdash; when home-field advantage was
-        near zero &mdash; as heavily as last week.</p>
-      <p>Predictions now subtract the drift measured over the most recent season of training games.
-        Across the three base models away bias fell to <code>+0.25</code>&ndash;<code>+0.29</code>, and
-        margin bias from about <code>&minus;0.89</code> to <code>&minus;0.19</code>.</p>
-    </div>
-  </div>
-
-  <div class="warn">
-    <p><strong>This is not a betting tool.</strong> Against the closing spread these predictions hit
-    51.0% historically, where 52.4% is break-even at standard odds &mdash; a &minus;2.7% return, and a
-    rate indistinguishable from a coin flip at this sample size. The market also predicts margins more
-    accurately than the models do (12.44 vs 12.87 points of typical error). Read this as a score
-    forecast, not an edge.</p>
+  <div class="foot">
+    <p><b>Scores read away&#8211;home</b>, rounded to one decimal. The models predict
+    two point totals; margin and total fall out of those.</p>
+    <p><b>&#10003; and &#10007; grade the winner only</b> &#8212; the sign of the predicted
+    margin against the sign of the real one. A model can be twenty points off and still
+    have called the game, which is why the margin error sits next to the tick rather than
+    replacing it.</p>
+    <p><b>The market column is reference only.</b> Betting lines are never an input to
+    any model &#8212; not as a feature, not as a prior, not as a sanity filter. It is the
+    closing line, so a midweek prediction is being shown against a number that kept
+    moving until kickoff.</p>
+    <p><b>Grading never edits a prediction.</b> Each week is written to its own parquet
+    the moment it is generated and is read back unchanged; the error columns are computed
+    fresh from final scores at render time.</p>
+    <p>Regenerate after new results land: <code>python -m src.predict.build_report</code></p>
   </div>
 </div>
 
 <script>
 const DATA = __DATA__;
+const MODELS = [["combined","Combined"],["linear","Linear"],["poisson","Poisson"],["gp","Gauss. Proc."]];
 const fmt = n => n.toFixed(1);
-const sgn = n => (n > 0 ? "+" : n < 0 ? "\u2212" : "") + Math.abs(n).toFixed(1);
+const signed = n => (n > 0 ? "+" : n < 0 ? "−" : "±") + Math.abs(n).toFixed(1);
+const slug = w => `${w.season}-w${String(w.week).padStart(2,"0")}`;
 
-function dayLabel(iso){
-  const d = new Date(iso + "T12:00:00Z");
-  return d.toLocaleDateString(undefined,{weekday:"short",month:"short",day:"numeric",timeZone:"UTC"});
-}
-function pair(m){ return fmt(m.away) + "\u2013" + fmt(m.home); }
+let idx = DATA.weeks.length - 1;
 
-function edgeChip(g){
-  if(!g.market) return '<span class="chip n">&mdash;</span>';
-  const e = g.models.combined.margin - g.market.spread;
-  const cls = Math.abs(e) < 1 ? "n" : (e > 0 ? "o" : "u");
-  return '<span class="chip ' + cls + '">' + sgn(e) + '</span>';
+function fromHash(){
+  const h = location.hash.replace(/^#/,"");
+  const i = DATA.weeks.findIndex(w => slug(w) === h);
+  if (i >= 0) idx = i;
 }
 
-const meta = DATA.meta;
-document.getElementById("sub").innerHTML =
-  "NFL " + meta.season + " &middot; regular season<br>" +
-  "generated " + new Date(meta.generated_at).toLocaleString(undefined,{dateStyle:"medium",timeStyle:"short"});
+function drawRail(){
+  const rail = document.getElementById("rail");
+  rail.replaceChildren(...DATA.weeks.map((w,i) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.setAttribute("aria-current", i === idx ? "true" : "false");
+    const label = document.createElement("span");
+    label.textContent = `${w.season} · Wk ${w.week}`;
+    const rec = document.createElement("span");
+    rec.className = "rec";
+    if (w.n_graded === 0){
+      rec.classList.add("pend");
+      rec.textContent = `${w.games.length} upcoming`;
+    } else {
+      const s = w.summary.combined;
+      rec.textContent = s ? `${s.winners}–${s.n - s.winners} · ${s.mae.toFixed(2)} MAE` : `${w.n_graded} final`;
+    }
+    b.append(label, rec);
+    b.onclick = () => { idx = i; location.hash = slug(w); render(); };
+    return b;
+  }));
+  const cur = rail.querySelector('[aria-current="true"]');
+  if (cur) cur.scrollIntoView({block:"nearest", inline:"center"});
+}
 
-document.getElementById("prov").innerHTML = [
-  ["Trained through", meta.trained_through],
-  ["Training games", meta.n_training_games.toLocaleString()],
-  ["Games predicted", DATA.games.length],
-  ["Models", "4"]
-].map(([k,v]) => "<div><dt>" + k + "</dt><dd>" + v + "</dd></div>").join("");
-
-document.getElementById("tbody").innerHTML = DATA.games.map(g => {
-  const mk = g.market;
-  const spread = mk ? (mk.spread > 0 ? g.home + " \u2212" + mk.spread.toFixed(1)
-                                     : g.away + " \u2212" + Math.abs(mk.spread).toFixed(1)) : "\u2014";
-  const ou = mk ? "o/u " + mk.total.toFixed(1) : "";
-  return "<tr>" +
-    '<td class="matchup">' + g.away + '<span class="at">@</span>' + g.home +
-      '<span class="day">' + dayLabel(g.kickoff) + "</span></td>" +
-    '<td class="lead">' + pair(g.models.combined) + "</td>" +
-    '<td class="soft">' + pair(g.models.linear) + "</td>" +
-    '<td class="soft">' + pair(g.models.poisson) + "</td>" +
-    '<td class="soft">' + pair(g.models.gp) + "</td>" +
-    '<td class="mkt line">' + spread + "<br>" + ou + "</td>" +
-    '<td class="mkt implied">' + (mk ? pair(mk) : "\u2014") + "</td>" +
-    "<td>" + edgeChip(g) + "</td></tr>";
-}).join("");
-
-document.getElementById("cards").innerHTML = DATA.games.map(g => {
-  const mk = g.market;
-  const spread = mk ? (mk.spread > 0 ? g.home + " \u2212" + mk.spread.toFixed(1)
-                                     : g.away + " \u2212" + Math.abs(mk.spread).toFixed(1)) : "\u2014";
+function drawProv(w){
+  const graded = w.n_graded === w.games.length && w.n_graded > 0;
   const rows = [
-    ["Combined", pair(g.models.combined)],
-    ["Linear", pair(g.models.linear)],
-    ["Poisson", pair(g.models.poisson)],
-    ["Gaussian process", pair(g.models.gp)]
-  ].map(([k,v]) => '<div class="row"><span class="k">' + k + '</span><span class="v">' + v + "</span></div>").join("");
-  const market = mk ? '<div class="row mk"><span class="k">Market line</span><span class="v">' +
-      spread + " &middot; o/u " + mk.total.toFixed(1) + '</span></div>' +
-    '<div class="row mk"><span class="k">Market implied score</span><span class="v">' + pair(mk) + "</span></div>" : "";
-  return '<div class="card"><h3>' + g.away + " @ " + g.home + '</h3>' +
-    '<div class="day">' + dayLabel(g.kickoff) + "</div>" + rows + market +
-    '<div class="row"><span class="k">Edge vs market</span><span class="v">' + edgeChip(g) + "</span></div></div>";
-}).join("");
+    ["Week", `${w.season} · Week ${w.week}`],
+    ["Games", `${w.games.length}${graded ? " (all final)" : w.n_graded ? ` (${w.n_graded} final)` : ""}`],
+    ["Trained through", w.trained_through],
+    ["Training games", w.n_training_games.toLocaleString()],
+    ["Predicted", w.generated_at.slice(0,10)],
+  ];
+  const dl = document.getElementById("prov");
+  dl.replaceChildren(...rows.map(([k,v]) => {
+    const d = document.createElement("div");
+    const dt = document.createElement("dt"); dt.textContent = k;
+    const dd = document.createElement("dd"); dd.textContent = v;
+    d.append(dt, dd); return d;
+  }));
+}
+
+function drawLede(w){
+  const el = document.getElementById("lede");
+  el.replaceChildren();
+  const b = document.createElement("strong");
+  if (w.n_graded === 0){
+    b.textContent = `${w.games.length} games not yet played.`;
+    el.append(b, document.createTextNode(
+      ` Every model below was fit on all ${w.n_training_games.toLocaleString()} games completed ` +
+      `through ${w.trained_through} — nothing from this week or later. Once the scores are in, ` +
+      `re-run the report and this page grades itself.`));
+  } else {
+    const s = w.summary.combined;
+    b.textContent = `${w.n_graded} of ${w.games.length} games are final.`;
+    el.append(b, document.createTextNode(
+      s ? ` The combined model called ${s.winners} of ${s.n} winners and missed each score by ` +
+          `${s.mae.toFixed(2)} points on average (${s.margin_mae.toFixed(2)} on the margin). ` +
+          `A tick marks a correct winner; the number beside it is the margin error, ` +
+          `signed so that +7.0 means the model had the home team seven points better ` +
+          `than they turned out to be.`
+        : " Grades are shown per game below."));
+  }
+}
+
+function drawFlag(w){
+  const el = document.getElementById("flag");
+  el.replaceChildren();
+  if (!w.backfilled) return;
+  const d = document.createElement("div");
+  d.className = "flag";
+  const b = document.createElement("b");
+  b.textContent = "Backfilled week. ";
+  d.append(b, document.createTextNode(
+    `These predictions were generated on ${w.generated_at.slice(0,10)}, after the games were ` +
+    `played. The models still only saw data through ${w.trained_through}, so the numbers are ` +
+    `genuinely out of sample — but unlike the weeks predicted ahead of kickoff, nothing stopped ` +
+    `them from being regenerated until they looked good. Weigh them accordingly.`));
+  el.append(d);
+}
+
+function drawCard(w){
+  const card = document.getElementById("card");
+  card.replaceChildren();
+  if (!w.n_graded){ card.style.display = "none"; return; }
+  card.style.display = "";
+  const scored = MODELS.filter(([k]) => w.summary[k]);
+  if (!scored.length){ card.style.display = "none"; return; }
+  const best = Math.min(...scored.map(([k]) => w.summary[k].mae));
+  card.replaceChildren(...scored.map(([k,label]) => {
+    const s = w.summary[k];
+    const sec = document.createElement("section");
+    if (s.mae === best) sec.className = "best";
+    const h = document.createElement("h3"); h.textContent = label;
+    const big = document.createElement("div"); big.className = "big";
+    big.textContent = `${s.winners}–${s.n - s.winners}`;
+    const note = document.createElement("div"); note.className = "note";
+    note.textContent = `${s.mae.toFixed(2)} pts avg error per score · ${s.margin_mae.toFixed(2)} on margin`;
+    sec.append(h, big, note); return sec;
+  }));
+}
+
+function drawHead(w){
+  const cells = [["matchup","Matchup"]];
+  if (w.n_graded) cells.push(["final","Final"]);
+  MODELS.forEach(([,label]) => cells.push(["", label]));
+  cells.push(["mkt","Market"]);
+  document.getElementById("head").replaceChildren(...cells.map(([cls,label]) => {
+    const th = document.createElement("th");
+    if (cls) th.className = cls;
+    th.textContent = label;
+    return th;
+  }));
+}
+
+function modelCell(g, key){
+  const td = document.createElement("td");
+  const p = g.models[key];
+  if (!p){ td.className = "dash"; td.textContent = "—"; return td; }
+  td.append(document.createTextNode(`${fmt(p.away)}–${fmt(p.home)}`));
+  const gr = g.grade && g.grade[key];
+  if (gr){
+    const s = document.createElement("span");
+    s.className = "err " + (gr.winner_correct ? "hit" : "miss");
+    s.textContent = `${gr.winner_correct ? "✓" : "✗"} ${signed(gr.margin_err)} margin`;
+    s.title = `away ${signed(gr.err_away)}, ` +
+              `home ${signed(gr.err_home)} · ${gr.abs_total} total points off`;
+    td.append(s);
+  }
+  return td;
+}
+
+function drawBody(w){
+  document.getElementById("body").replaceChildren(...w.games.map(g => {
+    const tr = document.createElement("tr");
+    const m = document.createElement("td");
+    m.className = "matchup";
+    m.append(document.createTextNode(`${g.away} @ ${g.home}`));
+    const dt = document.createElement("span");
+    dt.className = "dt"; dt.textContent = g.kickoff;
+    m.append(dt);
+    tr.append(m);
+
+    if (w.n_graded){
+      const f = document.createElement("td");
+      f.className = "final";
+      if (g.actual) f.textContent = `${g.actual.away}–${g.actual.home}`;
+      else { f.classList.add("dash"); f.textContent = "—"; }
+      tr.append(f);
+    }
+    MODELS.forEach(([k]) => tr.append(modelCell(g, k)));
+
+    const mk = document.createElement("td");
+    mk.className = "mkt";
+    if (g.market) mk.textContent = `${fmt(g.market.away)}–${fmt(g.market.home)}`;
+    else { mk.classList.add("dash"); mk.textContent = "no line"; }
+    tr.append(mk);
+    return tr;
+  }));
+}
+
+function render(){
+  const w = DATA.weeks[idx];
+  document.getElementById("sub").textContent =
+    `${DATA.weeks.length} week${DATA.weeks.length > 1 ? "s" : ""} on file · ` +
+    `report built ${DATA.built_at.slice(0,10)}`;
+  document.title = `NFL Score Ledger — ${w.season} Week ${w.week}`;
+  drawRail(); drawProv(w); drawLede(w); drawFlag(w); drawCard(w); drawHead(w); drawBody(w);
+}
+
+window.addEventListener("hashchange", () => { fromHash(); render(); });
+document.addEventListener("keydown", e => {
+  if (e.target.tagName === "INPUT" || e.metaKey || e.ctrlKey) return;
+  if (e.key === "ArrowLeft" && idx > 0){ idx--; location.hash = slug(DATA.weeks[idx]); }
+  if (e.key === "ArrowRight" && idx < DATA.weeks.length - 1){ idx++; location.hash = slug(DATA.weeks[idx]); }
+});
+
+fromHash();
+render();
 </script>

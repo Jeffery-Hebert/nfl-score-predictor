@@ -138,8 +138,14 @@ def walk_forward_evaluate_by_season(
 
 
 def score_predictions(results: pd.DataFrame) -> dict:
-    home_err = results["home_score"] - results["home_pred"]
-    away_err = results["away_score"] - results["away_pred"]
+    # Residuals are prediction minus reality, positive = predicted too high.
+    # Only squares and absolute values are taken below, so the sign never
+    # reaches a caller -- but this was the one place in the project computing
+    # it the other way round, and the next person to add a mean() here would
+    # have reported every bias backwards. Everything else (calibration.bias,
+    # error_analysis, recent_residual_offset, the ledger page) uses this sign.
+    home_err = results["home_pred"] - results["home_score"]
+    away_err = results["away_pred"] - results["away_score"]
     return {
         "home_rmse": np.sqrt((home_err**2).mean()),
         "away_rmse": np.sqrt((away_err**2).mean()),

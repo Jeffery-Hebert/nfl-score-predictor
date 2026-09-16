@@ -33,10 +33,10 @@ were noise dressed as precision.
 
 Run: python -m src.predict.predict_week                 # next unplayed week
      python -m src.predict.predict_week --season 2026 --week 2
-     python -m src.predict.predict_week --week 2 --html   # open in any browser
+     python -m src.predict.predict_week --week 2 --html   # + rebuild the page
      python -m src.predict.predict_week --week 2 --json out.json
 Output: data/predictions/<season>_wk<week>.parquet
-        data/predictions/<season>_wk<week>.html   (with --html)
+        data/predictions/index.html   (with --html; see build_report.py)
 """
 
 import argparse
@@ -54,7 +54,7 @@ from src.models.linear import fit_linear, predict_linear
 from src.models.poisson_glm import fit_poisson, predict_poisson
 
 MODEL_TABLE = Path("data/processed/model_table.parquet")
-TEMPLATE = Path(__file__).with_name("report_template.html")
+SCHEDULES = Path("data/raw/schedules.parquet")
 
 # One decimal place. Typical error is over nine points, so anything finer is
 # noise wearing the costume of precision.
@@ -100,20 +100,55 @@ def assert_training_is_current(train: pd.DataFrame, kickoff: pd.Timestamp) -> in
     The failure this prevents is quiet and expensive: predicting Week N from a
     table that never received Week N-1, which produces confident, wrong numbers
     and no error message.
+
+    This used to be a calendar test -- refuse if the newest training game was
+    more than 21 days old. That was wrong, and wrong in a way that would have
+    bitten on the single most important week of the year: every Week 1 sits
+    roughly 210 days after the previous Super Bowl, so a fully up-to-date table
+    looks 200 days stale and the guard would have blocked a live Week 1
+    prediction outright.
+
+    Staleness is a completeness question, not an elapsed-time one, so ask it
+    that way. Two things can go wrong, and they need different fixes:
+
+      1. the raw pull is behind    -- schedules has no score for a game that
+                                      has already been played; re-pull.
+      2. the feature build is behind -- schedules has the score but the model
+                                      table does not; rebuild.
     """
-    newest = train["gameday"].max()
-    gap = (kickoff - newest).days
-    if gap > 21:
+    sched = pd.read_parquet(SCHEDULES)
+    sched["gameday"] = pd.to_datetime(sched["gameday"])
+
+    # (2) results that exist upstream but never reached the model table.
+    completed_before = sched[(sched["gameday"] < kickoff) & sched["home_score"].notna()]
+    missing = set(completed_before["game_id"]) - set(train["game_id"])
+    if missing:
+        sample = ", ".join(sorted(missing)[:4])
         sys.exit(
-            f"ERROR: newest completed game is {newest.date()}, {gap} days before "
-            f"this week's kickoff ({kickoff.date()}).\n"
-            "The model would be predicting without recent results. Refresh:\n"
+            f"ERROR: {len(missing)} completed games are in schedules but not in the "
+            f"training table (e.g. {sample}).\n"
+            "The model would be predicting without results it could have had. Rebuild:\n"
+            "  python -m src.features.build_all"
+        )
+
+    # (1) games that have already kicked off and still have no score. Scoped to
+    # a recent window: a game cancelled years ago (2021 BUF@CIN) never gets a
+    # score and must not trip this forever.
+    horizon = min(kickoff, pd.Timestamp.now().normalize()) - pd.Timedelta(days=1)
+    recent = sched[sched["gameday"].between(horizon - pd.Timedelta(days=45), horizon)]
+    unscored = recent[recent["home_score"].isna()]
+    if len(unscored):
+        sys.exit(
+            f"ERROR: {len(unscored)} games kicked off on or before "
+            f"{horizon.date()} and still have no final score.\n"
+            "The raw data is behind. Refresh, then rebuild:\n"
             "  python src/ingest/pull_schedules.py\n"
             "  python src/ingest/pull_pbp.py\n"
             "  python src/ingest/pull_injuries.py\n"
             "  python -m src.features.build_all"
         )
-    return gap
+
+    return (kickoff - train["gameday"].max()).days
 
 
 def market_reference(game_ids) -> pd.DataFrame:
@@ -128,58 +163,6 @@ def market_reference(game_ids) -> pd.DataFrame:
     return s
 
 
-def to_records(out: pd.DataFrame) -> dict:
-    """The shape the report template expects."""
-    games = []
-    for _, r in out.iterrows():
-        g = {
-            "away": r["away_team"],
-            "home": r["home_team"],
-            "kickoff": str(pd.Timestamp(r["gameday"]).date()),
-            "models": {},
-        }
-        for m in ["combined", "linear", "poisson", "gp"]:
-            if f"{m}_home" not in out.columns or pd.isna(r[f"{m}_home"]):
-                continue
-            g["models"][m] = {
-                "away": round(float(r[f"{m}_away"]), DP),
-                "home": round(float(r[f"{m}_home"]), DP),
-                "margin": round(float(r[f"{m}_margin"]), DP),
-                "total": round(float(r[f"{m}_total"]), DP),
-            }
-        g["market"] = (
-            {
-                "spread": float(r["spread_line"]),
-                "total": float(r["total_line"]),
-                "away": round(float(r["market_away"]), DP),
-                "home": round(float(r["market_home"]), DP),
-            }
-            if pd.notna(r.get("spread_line"))
-            else None
-        )
-        games.append(g)
-    return {
-        "meta": {
-            "season": int(out["season"].iloc[0]),
-            "week": int(out["week"].iloc[0]),
-            "trained_through": str(out["trained_through"].iloc[0]),
-            "n_training_games": int(out["n_training_games"].iloc[0]),
-            "generated_at": str(out["generated_at"].iloc[0]),
-        },
-        "games": games,
-    }
-
-
-def write_html(out: pd.DataFrame, path: Path) -> None:
-    """A single self-contained file. Open it in any browser -- no server, no
-    build step, no network except the Google Fonts stylesheet (which degrades
-    to system fonts offline)."""
-    if not TEMPLATE.exists():
-        sys.exit(f"ERROR: {TEMPLATE} is missing.")
-    payload = json.dumps(to_records(out), separators=(",", ":"))
-    path.write_text(TEMPLATE.read_text().replace("__DATA__", payload))
-
-
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--season", type=int, default=None)
@@ -188,7 +171,7 @@ def main():
     ap.add_argument(
         "--html",
         action="store_true",
-        help="also write a standalone page you can open in a browser",
+        help="also rebuild data/predictions/index.html (every week, graded)",
     )
     ap.add_argument(
         "--skip-gp",
@@ -284,11 +267,13 @@ def main():
     print(f"Saved to {path}")
 
     if args.html:
-        html_path = OUT_DIR / f"{season}_wk{week:02d}.html"
-        write_html(out, html_path)
-        print(f"\nPage written to {html_path}")
-        print(f"  open it with:  xdg-open {html_path}")
-        print(f"  or in Firefox: firefox {html_path}")
+        # Deliberately NOT a page for this week alone. The report is rebuilt
+        # from every saved prediction, so the new week joins the ledger next to
+        # the ones already graded rather than replacing them.
+        from src.predict import build_report
+
+        print()
+        build_report.summarize(build_report.render())
 
     if args.json:
         Path(args.json).write_text(
