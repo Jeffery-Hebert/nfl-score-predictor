@@ -24,13 +24,13 @@ just "who wins."
 The headline number is **RMSE** (root mean squared error). Think of it as
 "typically how many points off are we, with big misses punished extra."
 
-Current accuracy, measured across 1,426 real games from 2021–2026:
+Current accuracy, measured across 1,440 real games from 2021–2026:
 
 | What | Typical error per team's score |
 |---|---|
 | Always guess the league average | ~9.93 points |
-| Simple rule, no machine learning | 9.44 points |
-| **Our best model (Poisson)** | **9.35 points** |
+| Simple rule, no machine learning | 9.46 points |
+| **Our best model (Poisson)** | **9.37 points** |
 | Las Vegas betting markets | ~9.10 points |
 
 Two honest takeaways:
@@ -258,6 +258,24 @@ python -m src.models.stacking           # ~1 minute, needs the three above
 python -m src.validate.model_scoreboard --against baseline --common-games
 ```
 
+### The weekly loop, once you're set up
+
+Every Tuesday, after the previous week's games are in the books:
+
+```bash
+python src/ingest/pull_schedules.py      # last week's final scores
+python src/ingest/pull_pbp.py
+python src/ingest/pull_injuries.py
+python -m src.features.build_all         # ~30s
+python -m src.predict.predict_week --html   # ~40s: predicts the new week,
+                                            # grades the old one, rebuilds the page
+firefox data/predictions/index.html
+```
+
+Step 4 is the only slow part and the only one that touches a model. If you just
+want last week's predictions graded against the results that landed, skip it and
+run `python -m src.predict.build_report` instead — a second, no refitting.
+
 ---
 
 ## 5b. Predicting games that haven't been played
@@ -298,9 +316,18 @@ point of keeping the parquet files in git: they are a dated record of what the
 model claimed *beforehand*, which is the only kind of forecast worth counting.
 
 Weeks that were predicted after the games were played are labelled **backfilled**
-on the page. They are still honest out-of-sample numbers — the fit never sees a
-game that hasn't kicked off — but nobody was stopping you from regenerating them
-until they looked good, so they don't carry the same weight.
+on the page. The fit still never sees a game that hasn't kicked off, so no result
+from that week reaches the model — but two softer advantages remain that a real
+pre-kickoff forecast doesn't have:
+
+1. nobody was stopping you from regenerating them until they looked good;
+2. the model's settings (the recency half-life, the ridge penalty) were chosen on
+   a dataset that already contained those weeks.
+
+Neither is leakage in the strict sense, and both are enough to make a backfilled
+record flatter than a live one. The 2025 season on this page is backfilled. The
+weeks predicted from 2026 Week 2 onward are not, and those are the ones to judge
+the model by.
 
 Rebuild the page any time new results land, without re-predicting anything:
 
@@ -450,7 +477,7 @@ nothing, and can never beat Vegas. Odds are used only as a scoreboard.
 
 ## 8. Testing philosophy
 
-235 tests in four layers:
+263 tests in five layers:
 
 1. **Data contracts** — is the downloaded data shaped correctly? (Exactly 32
    teams, no duplicate plays, scores non-negative.)
@@ -459,7 +486,12 @@ nothing, and can never beat Vegas. Odds are used only as a scoreboard.
 3. **Freshness gates** — every built file must be newer than the files it was
    built from. This caught a real bug where results were being compared against
    a stale table for two days.
-4. **Statistical honesty** — improvements smaller than ~0.05 RMSE must pass a
+4. **Completeness gates** — the mirror image of leakage: does the model see
+   everything it *should*? A model that is leakage-free but silently missing
+   last week's games runs cleanly and is useless. This layer also covers the
+   ledger's grading — the sign of every error, and what counts as a correct
+   pick.
+5. **Statistical honesty** — improvements smaller than ~0.05 RMSE must pass a
    **bootstrap test** before being believed.
 
 > **What's a bootstrap test?** If a change improves error from 9.40 to 9.38, is
@@ -473,27 +505,41 @@ nothing, and can never beat Vegas. Odds are used only as a scoreboard.
 
 ## 9. Current status and what's next
 
-**Working:** the full data pipeline, leakage-safe evaluation, several trained
-models, and an honest measurement of how good they are.
-
-**Not built yet:** there is no live prediction step. `src/predict/` is empty.
-The system can tell you how well it *would have* predicted past games; it
-cannot yet hand you a prediction for next Sunday. That's the most obvious
-missing piece.
+**Working:** the full data pipeline, leakage-safe evaluation, four trained
+models, a live prediction step for games that haven't been played, and a ledger
+page that grades those predictions once the results land.
 
 **Known gaps:**
-- No live starting-quarterback source for future games (historical data uses
-  who actually played, which you don't know in advance).
-- The Gaussian Process model takes 36 minutes to evaluate and is no longer
-  better than models that take seconds.
-- The ensemble that combines models does not beat the single best model.
+- No live starting-quarterback source for future games. Historical rows know who
+  actually played; on Wednesday you don't. `load_depth_charts` is the obvious
+  place to look and hasn't been tried.
+- The three-model ensemble does not beat the best single model, and its
+  calibration is *worse* than its own inputs — the meta-model refits on
+  predictions that have already had the bias correction applied to them, and
+  over-corrects. Either feed it uncorrected inputs or drop it. Not yet done.
+- Predicted totals ran about 2 points high in 2026 Week 1. Three fixes were
+  tested and all three were rejected (they each made the scores worse); the
+  mechanism is written up in `src/experiments/` so nobody re-tries them blind.
+- Against the spread the model is at coin-flip, not profitable. See below.
 
-**Current benchmark** (1,426 games, 2021–2026, typical error per team's score):
+**Current benchmark** (1,440 games, 2021–2026, RMSE per team's score — the
+number every future change is measured against):
 
 | Model | Error | Beats the no-ML baseline? |
 |---|---|---|
-| Poisson GLM | **9.3525** | yes, confirmed |
-| Ridge regression | 9.3685 | yes, confirmed |
-| Rule-based baseline | 9.4415 | — |
+| Poisson GLM | **9.371** | yes, confirmed by bootstrap |
+| Gaussian Process | 9.376 | yes, confirmed by bootstrap |
+| Ridge regression | 9.385 | not distinguishable from noise |
+| Rule-based baseline | 9.458 | — |
 
-Any change is measured against these numbers.
+(On the 1,155 games all sixteen models share — the only fair head-to-head — the
+order is GP 9.277, Poisson 9.279, Ridge 9.290, stack 9.293, baseline 9.350.)
+
+Home-score bias, which was the last thing fixed, now sits at +0.06 to +0.09
+points across the active models. It was +0.78 before the correction.
+
+**Is it ready to bet with? No.** Beating the market requires about 52.4% against
+the spread to cover the vig; the model is at 51.0%, which is inside the range you
+would expect from a coin flip over this many games. It predicts *scores*
+respectably and it does not predict *market inefficiency* at all. Those are
+different jobs, and only the first one is going well.
