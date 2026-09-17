@@ -3,6 +3,14 @@ Aggregates play-by-play data into one row per team per game (offense +
 defense efficiency), split by pass/rush, plus CPOE. Building block for
 rolling/recency-weighted features used by every downstream model.
 
+Play COUNTS are emitted next to every per-play mean (off_pass_plays,
+off_rush_plays, def_pass_plays, def_rush_plays). A mean without its
+denominator cannot be re-weighted or shrunk downstream: averaging eleven
+games' rush-EPA means treats a 9-carry game and a 38-carry game as equal
+evidence, which they are not. build_split_efficiency.py needs the counts to
+weight by volume and to size its shrinkage, so they are carried here rather
+than recomputed from play-by-play a second time.
+
 Run: python src/features/build_team_game_stats.py
 Output: data/processed/team_game_stats.parquet
 """
@@ -35,7 +43,11 @@ def build_offense_stats(pbp: pd.DataFrame) -> pd.DataFrame:
     pass_plays = plays[plays["play_type"] == "pass"]
     pass_stats = (
         pass_plays.groupby(["game_id", "posteam"])
-        .agg(off_pass_epa_per_play=("epa", "mean"), off_cpoe=("cpoe", "mean"))
+        .agg(
+            off_pass_epa_per_play=("epa", "mean"),
+            off_pass_plays=("epa", "count"),
+            off_cpoe=("cpoe", "mean"),
+        )
         .reset_index()
         .rename(columns={"posteam": "team"})
     )
@@ -43,7 +55,10 @@ def build_offense_stats(pbp: pd.DataFrame) -> pd.DataFrame:
     rush_plays = plays[plays["play_type"] == "run"]
     rush_stats = (
         rush_plays.groupby(["game_id", "posteam"])
-        .agg(off_rush_epa_per_play=("epa", "mean"))
+        .agg(
+            off_rush_epa_per_play=("epa", "mean"),
+            off_rush_plays=("epa", "count"),
+        )
         .reset_index()
         .rename(columns={"posteam": "team"})
     )
@@ -71,6 +86,7 @@ def build_defense_stats(pbp: pd.DataFrame) -> pd.DataFrame:
         pass_plays.groupby(["game_id", "defteam"])
         .agg(
             def_pass_epa_per_play_allowed=("epa", "mean"),
+            def_pass_plays=("epa", "count"),
             def_cpoe_allowed=("cpoe", "mean"),
         )
         .reset_index()
@@ -80,7 +96,10 @@ def build_defense_stats(pbp: pd.DataFrame) -> pd.DataFrame:
     rush_plays = plays[plays["play_type"] == "run"]
     rush_stats = (
         rush_plays.groupby(["game_id", "defteam"])
-        .agg(def_rush_epa_per_play_allowed=("epa", "mean"))
+        .agg(
+            def_rush_epa_per_play_allowed=("epa", "mean"),
+            def_rush_plays=("epa", "count"),
+        )
         .reset_index()
         .rename(columns={"defteam": "team"})
     )
@@ -147,9 +166,15 @@ def main():
     out_path.parent.mkdir(parents=True, exist_ok=True)
     result.to_parquet(out_path, index=False)
     print(f"Built {len(result)} team-game rows ({len(result)//2} games)")
+    splits = [
+        "off_pass_plays",
+        "off_rush_plays",
+        "def_pass_plays",
+        "def_rush_plays",
+    ]
     print(
-        f"New columns: off_pass_epa_per_play, off_rush_epa_per_play, off_cpoe, "
-        f"def_pass_epa_per_play_allowed, def_rush_epa_per_play_allowed, def_cpoe_allowed"
+        "Per-split play counts (for build_split_efficiency.py): "
+        + ", ".join(f"{c} mean {result[c].mean():.1f}" for c in splits)
     )
 
 

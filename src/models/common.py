@@ -14,11 +14,26 @@ from one list removes that class of drift; tests/test_feature_cols.py holds
 the contract.
 """
 
+# NOTE (2026-09-17): pregame_off_epa_per_play and pregame_def_epa_per_play were
+# REMOVED from this list when the pass/rush split shipped. They were the blended
+# all-plays EPA rates, and the split measures the same efficiency at a finer
+# grain -- carrying both put two descriptions of one quantity in front of the
+# model. Blended offensive EPA correlates 0.86 with the shrunk pass split and
+# 0.58 with the rush split; the defensive blend, 0.78 and 0.45.
+#
+# This is a deliberate reversal of how the split first shipped, which kept the
+# blend alongside on the grounds that it is the lower-variance measurement. The
+# operator's call was that the duplication is the bigger problem. The splits are
+# still volume-weighted and shrunk, so the noise argument that originally
+# motivated keeping the blend is handled inside build_split_efficiency.py rather
+# than by carrying a second copy of the statistic.
+#
+# Success rate is NOT split and stays blended -- it is the most persistent thing
+# the project measures (split-half r = 0.695) and nothing about it is duplicated
+# by the EPA columns.
 BASE_FEATURE_COLS = [
     "pregame_team_score",
     "pregame_opp_score",
-    "pregame_off_epa_per_play",
-    "pregame_def_epa_per_play",
     "pregame_off_success_rate",
     "pregame_def_success_rate_allowed",
     "rest_days",
@@ -47,11 +62,45 @@ GAME_FEATURE_COLS = ["is_neutral_site", "is_playoff"]
 # (-0.0388 -> -0.0312 on Poisson). Fewer, stronger features win here.
 INJURY_FEATURE_COLS = ["injury_impact"]
 
+# Pass/rush efficiency split, offense and defense, from
+# src/features/build_split_efficiency.py. Sided like BASE_FEATURE_COLS but
+# sourced from split_efficiency.parquet, hence a separate list.
+#
+# This is the SECOND attempt at this idea. The first (2026-09-14) replaced
+# blended EPA with raw pass-only/rush-only averages and measured a real
+# regression on Linear: +0.037 home RMSE, 95% CI [+0.0058, +0.0685]. Two things
+# are different now and both matter:
+#
+#   1. that verdict was measured with sklearn LinearRegression -- unregularized
+#      OLS, on a 16-column feature set with no injury_impact. The project
+#      diagnosed that estimator as unfit for this problem the following day and
+#      replaced it with RidgeCV. The old number was taken with a broken
+#      instrument.
+#   2. the recorded failure mechanism was that splitting halves the effective
+#      play count per component and raises measurement noise. v1 did nothing
+#      about that. These columns are volume-weighted per play and shrunk toward
+#      a recency-weighted league prior by measured empirical-Bayes constants
+#      (225-540 plays), so a thin sample is pulled toward the league instead of
+#      being handed to the model at face value.
+#
+# These REPLACE blended EPA rather than joining it -- see the note on
+# BASE_FEATURE_COLS above. That is the same shape as v1, but the noise problem
+# that sank v1 is now handled by the shrinkage rather than by keeping a second,
+# coarser copy of the same measurement in the feature set.
+SPLIT_FEATURE_COLS = [
+    "pregame_off_pass_epa_shrunk",
+    "pregame_off_rush_epa_shrunk",
+    "pregame_def_pass_epa_allowed_shrunk",
+    "pregame_def_rush_epa_allowed_shrunk",
+]
+
 FEATURE_COLS = (
     [f"home_{c}" for c in BASE_FEATURE_COLS]
     + [f"away_{c}" for c in BASE_FEATURE_COLS]
     + [f"home_{c}" for c in INJURY_FEATURE_COLS]
     + [f"away_{c}" for c in INJURY_FEATURE_COLS]
+    + [f"home_{c}" for c in SPLIT_FEATURE_COLS]
+    + [f"away_{c}" for c in SPLIT_FEATURE_COLS]
     + GAME_FEATURE_COLS
 )
 

@@ -16,6 +16,7 @@ from src.models.common import (
     FEATURE_COLS,
     GAME_FEATURE_COLS,
     INJURY_FEATURE_COLS,
+    SPLIT_FEATURE_COLS,
 )
 
 
@@ -25,9 +26,69 @@ def test_feature_cols_is_base_prefixed_home_then_away_plus_game_level():
         + [f"away_{c}" for c in BASE_FEATURE_COLS]
         + [f"home_{c}" for c in INJURY_FEATURE_COLS]
         + [f"away_{c}" for c in INJURY_FEATURE_COLS]
+        + [f"home_{c}" for c in SPLIT_FEATURE_COLS]
+        + [f"away_{c}" for c in SPLIT_FEATURE_COLS]
         + GAME_FEATURE_COLS
     )
     assert FEATURE_COLS == expected
+
+
+def test_blended_epa_is_not_carried_alongside_the_split():
+    """The split REPLACES blended EPA; the two must not both be present.
+
+    Blended off/def EPA per play and the pass/rush split describe the same
+    efficiency at different grains -- the blend correlates 0.86 with the shrunk
+    pass split and 0.58 with the rush split (0.78 / 0.45 on defence). Carrying
+    both puts two descriptions of one quantity in front of an additive model.
+
+    The split shipped WITH the blend on 2026-09-17 and the blend was removed the
+    same day by operator decision. This pins that decision so the blend cannot
+    drift back in as a well-meaning 'the split is noisy, keep the stable one
+    too' -- the noise is handled by shrinkage inside build_split_efficiency.py.
+    """
+    for side in ("home", "away"):
+        assert f"{side}_pregame_off_epa_per_play" not in FEATURE_COLS
+        assert f"{side}_pregame_def_epa_per_play" not in FEATURE_COLS
+        # ...and the split that replaced it is actually there.
+        assert f"{side}_pregame_off_pass_epa_shrunk" in FEATURE_COLS
+        assert f"{side}_pregame_off_rush_epa_shrunk" in FEATURE_COLS
+        assert f"{side}_pregame_def_pass_epa_allowed_shrunk" in FEATURE_COLS
+        assert f"{side}_pregame_def_rush_epa_allowed_shrunk" in FEATURE_COLS
+
+
+def test_efficiency_is_described_exactly_once_per_side_per_unit():
+    """Generalises the above: for each side and each unit, count how many EPA
+    efficiency columns describe it. Two is duplication, zero is a missing
+    signal."""
+    for side in ("home", "away"):
+        for unit in ("off", "def"):
+            epa_cols = [
+                c
+                for c in FEATURE_COLS
+                if c.startswith(f"{side}_pregame_{unit}") and "epa" in c
+            ]
+            assert len(epa_cols) == 2, (
+                f"{side}/{unit} is described by {len(epa_cols)} EPA columns "
+                f"({epa_cols}) -- expected exactly the pass and rush split"
+            )
+
+
+def test_split_columns_are_the_shrunk_ones_not_the_raw_rolling_ones():
+    """build_rolling_features.py still emits pregame_off_pass_epa_per_play and
+    friends -- the v1, game-equal-weighted, unshrunk versions kept only for the
+    archived experiments. Those must never be what the models train on."""
+    raw_v1 = {
+        "pregame_off_pass_epa_per_play",
+        "pregame_off_rush_epa_per_play",
+        "pregame_def_pass_epa_per_play_allowed",
+        "pregame_def_rush_epa_per_play_allowed",
+    }
+    for col in FEATURE_COLS:
+        stripped = col.replace("home_", "", 1).replace("away_", "", 1)
+        assert stripped not in raw_v1, (
+            f"{col} is the unshrunk v1 column from build_rolling_features.py, "
+            "not the volume-weighted one from build_split_efficiency.py"
+        )
 
 
 def test_game_level_features_are_not_sided():

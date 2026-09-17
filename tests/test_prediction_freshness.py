@@ -130,3 +130,116 @@ class TestRawPullBehind:
             {"game_id": ["recent"], "gameday": [today - pd.Timedelta(days=7)]}
         )
         predict_week.assert_training_is_current(train, today + pd.Timedelta(days=4))
+
+
+# ------------------------------------------------- feature readiness
+
+# The guard above answers "is the training data complete?". It cannot answer
+# "can the feature set actually be evaluated for the games we are about to
+# predict?", and that is a separate way for a live prediction to be silently
+# wrong.
+#
+# The failure mode. Every model imputes missing inputs with the TRAINING-fold
+# mean (`X.fillna(model["means"])`). That is correct and leakage-safe, but it
+# means a feature that is null for unplayed games does not raise -- every team
+# quietly receives the same league-average value for it, the prediction still
+# comes out looking like a football score, and the feature has silently stopped
+# contributing. A whole feature family can drop out of a live forecast with no
+# error anywhere.
+#
+# This is not hypothetical for the split-efficiency columns. They are built from
+# a running accumulator over prior games, so an off-by-one at the end of the
+# history -- or a join that only covers played games -- would populate the
+# backtest perfectly and leave the upcoming week empty. The backtest would look
+# fine. Only the live prediction would be broken.
+#
+# Added 2026-09-17 with the pass/rush split. Applies to whatever FEATURE_COLS
+# holds, so a future feature family is covered without touching this file.
+
+
+@pytest.mark.requires_data
+class TestUpcomingWeekIsPredictable:
+    @pytest.fixture(scope="class")
+    def upcoming(self):
+        from src.models.common import FEATURE_COLS
+
+        table = pd.read_parquet("data/processed/model_table.parquet")
+        table["gameday"] = pd.to_datetime(table["gameday"])
+        unplayed = table[table["home_score"].isna()]
+        if unplayed.empty:
+            pytest.skip("no unplayed games in the table -- season is complete")
+        nxt = unplayed.sort_values("gameday").iloc[0]
+        week = unplayed[
+            (unplayed["season"] == nxt["season"]) & (unplayed["week"] == nxt["week"])
+        ]
+        return table, week, FEATURE_COLS
+
+    def test_every_feature_column_exists(self, upcoming):
+        table, _, feature_cols = upcoming
+        missing = set(feature_cols) - set(table.columns)
+        assert not missing, (
+            f"model_table is missing {sorted(missing)} -- FEATURE_COLS and the "
+            "feature pipeline have drifted apart. Rebuild: "
+            "python -m src.features.build_all"
+        )
+
+    def test_no_feature_is_null_for_the_next_unplayed_week(self, upcoming):
+        """The core check. A null here does not crash -- it silently becomes the
+        training mean, and the feature stops doing anything."""
+        _, week, feature_cols = upcoming
+        null_rate = week[feature_cols].isna().mean()
+        broken = null_rate[null_rate > 0]
+        assert broken.empty, (
+            f"season {int(week['season'].iloc[0])} week {int(week['week'].iloc[0])} "
+            f"has null features:\n{(broken * 100).round(1).to_string()}\n"
+            "These would be silently replaced by the training mean, so every team "
+            "gets the same value and the feature contributes nothing to the "
+            "forecast. Nothing else would report an error."
+        )
+
+    def test_features_actually_vary_across_the_upcoming_matchups(self, upcoming):
+        """Non-null is not enough. A column that is present but constant across
+        all 16 games carries no information about who plays whom -- the same
+        silent failure wearing a different disguise."""
+        _, week, feature_cols = upcoming
+        from src.models.common import GAME_FEATURE_COLS
+
+        # Exempt by name, never by a variance threshold -- a threshold would
+        # quietly excuse a genuinely broken team feature too.
+        #   GAME_FEATURE_COLS   legitimately constant in most weeks (no neutral
+        #                       site, no playoff game on the slate).
+        #   prior_games_played  a season-progress counter. Within one week every
+        #                       team has played the same number of games, apart
+        #                       from byes, so near-constant is its correct
+        #                       behaviour rather than a fault.
+        exempt = set(GAME_FEATURE_COLS) | {
+            f"{side}_prior_games_played" for side in ("home", "away")
+        }
+        per_team = [c for c in feature_cols if c not in exempt]
+        constant = [c for c in per_team if week[c].nunique(dropna=False) <= 1]
+        assert not constant, (
+            f"these per-team features are identical for every game in "
+            f"season {int(week['season'].iloc[0])} week {int(week['week'].iloc[0])}: "
+            f"{constant}. They cannot be distinguishing the matchups."
+        )
+
+    def test_the_split_efficiency_family_reaches_the_upcoming_week(self, upcoming):
+        """Named guard for the 2026-09-17 feature family.
+
+        The generic checks above would catch a total failure. This one states the
+        specific expectation so the failure message names the right builder, and
+        so removing build_split_efficiency from the pipeline fails loudly here
+        rather than as an anonymous null."""
+        from src.models.common import SPLIT_FEATURE_COLS
+
+        _, week, _ = upcoming
+        sided = [f"{s}_{c}" for s in ("home", "away") for c in SPLIT_FEATURE_COLS]
+        missing = [c for c in sided if c not in week.columns]
+        assert not missing, (
+            f"{missing} absent -- build_split_efficiency.py did not reach "
+            "model_table. Check the join in build_game_features.py."
+        )
+        assert not week[sided].isna().any().any(), (
+            "the pass/rush split is null for the upcoming week. The backtest "
+            "would still pass; only the live forecast is broken."
+        )

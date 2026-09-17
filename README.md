@@ -230,7 +230,7 @@ python src/ingest/pull_pbp.py
 python src/ingest/pull_injuries.py
 ```
 
-**Step 2 — build all the features** (about 30 seconds, all 10 stages in order):
+**Step 2 — build all the features** (about 50 seconds, all 11 stages in order):
 
 ```bash
 python -m src.features.build_all
@@ -455,12 +455,46 @@ Recorded so nobody rebuilds them:
 
 | Idea | Outcome |
 |---|---|
-| Splitting efficiency into passing vs. rushing | Measurably worse |
+| Splitting efficiency into passing vs. rushing | Worse on the first attempt; **rebuilt and shipped** — see below |
 | CPOE (a quarterback accuracy stat) | Worse |
 | Adjusting stats for opponent strength | No effect |
 | Quarterback-specific historical stats | No effect |
 | Pace, turnover luck, special teams | Worse |
 | Weather | Not usable — see below |
+
+**The pass/rush split came back.** It is the one rejected idea that has since
+been rebuilt, and the story is worth keeping because the original rejection was
+partly an artifact of *how* it was measured.
+
+The first attempt replaced blended efficiency with pass-only and rush-only
+numbers and measured a real regression. But it was measured with the
+unregularized model — the estimator this project diagnosed as broken the
+very next day — and it did nothing about the problem it had itself identified:
+splitting a team's plays in two roughly halves the evidence behind each number.
+A team throws about 36 times and runs about 26 times a game, against 62 plays
+combined, and the old code treated a 9-carry game and a 38-carry game as equal
+evidence.
+
+The rebuild fixes both. Each number is now a rate per *play* rather than an
+average of per-game averages, so a heavy workload counts for more. And each is
+pulled toward the league average in proportion to how little evidence stands
+behind it — measured, not guessed: a team's own passing number earns only about
+a quarter of the weight after four games, and a bit under two-thirds after a
+full season. Defences are pulled harder than offences, because defensive
+performance is measurably less repeatable.
+
+Like the first attempt, the split **replaces** the combined efficiency numbers
+rather than sitting beside them. Keeping both was tried for about an hour and
+dropped: the combined number and the split describe the same thing at different
+levels of detail, and handing a model two versions of one measurement is asking
+it to divide the credit between them. Removing the combined columns cost
+nothing measurable — the models scored identically to three decimal places with
+and without them, which is itself the clearest evidence they were redundant.
+
+Result: **the regression is gone and a small improvement appears, but it is
+still inside the noise band** (Ridge −0.012, 95% CI [−0.034, +0.011]). It was
+shipped anyway as a deliberate call. Honest summary: it no longer hurts, it
+probably helps slightly, and the project cannot prove it.
 
 **Weather deserves explaining.** Historical weather is what *actually
 happened*. But to predict a future game you'd only have a *forecast*, which is
@@ -477,7 +511,7 @@ nothing, and can never beat Vegas. Odds are used only as a scoreboard.
 
 ## 8. Testing philosophy
 
-263 tests in five layers:
+294 tests in five layers:
 
 1. **Data contracts** — is the downloaded data shaped correctly? (Exactly 32
    teams, no duplicate plays, scores non-negative.)

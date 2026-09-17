@@ -7,9 +7,9 @@ Read this fully before proposing any new feature or architectural change. It exi
 - **Repo:** `nfl-score-predictor`, Python + pandas/sklearn, walk-forward evaluation harness at `src/validate/walk_forward.py` (now with per-fold progress logging and elapsed-time reporting — added after a session where a Gaussian Process run's duration was hard to judge without it).
 - **Production model stack:** `src/models/linear.py`, `poisson_glm.py`, `gaussian_process.py`, feeding `stacking.py` (a Ridge meta-model). `BASE_MODELS = ["linear", "poisson", "gp"]` in `stacking.py` — this was already reduced from 13 original candidate models before the sessions covered here; the operator confirmed this reduction was intentional and evidence-based, though the original comparison evidence itself was not directly reviewed in these sessions.
 - **Unused-but-retained models** (in `src/models/unused/`): `random_forest.py`, `xgboost_model.py`, `catboost_model.py`, `lightgbm_model.py`, `logistic.py`, `mlp.py`, `bayesian_hierarchical.py`, `rnn_lstm.py`, `monte_carlo.py`.
-- **Feature set (`src/models/common.py` FEATURE_COLS):** 16 columns — home/away pregame team-level rolling EPA, success rate, rest days, prior games played. Built via `src/features/build_rolling_features.py` (EWM, halflife = 17 weeks / 119 days, leakage-safe via `shift(1)`) → `build_game_features.py` → `model_table.parquet`.
+- **Feature set (`src/models/common.py` FEATURE_COLS):** 24 columns — home/away pregame team-level rolling scoring, success rate, rest days, prior games played (12 -- blended off/def EPA per play was REMOVED 2026-09-17, superseded by the split); `injury_impact` per side (2); volume-weighted shrunk pass/rush EPA splits, offence and defence, per side (8); `is_neutral_site`/`is_playoff` (2). (This line read "16 columns" until 2026-09-17; it had not been updated when injuries and the split shipped.) Built via `src/features/build_rolling_features.py` (EWM, halflife = 17 weeks / 119 days, leakage-safe via `shift(1)`) → `build_game_features.py` → `model_table.parquet`.
 - **Finale-week masking:** `is_finale_week()` (week 17 for 2019–2020, week 18 for 2021+) masks finale-week stats from contributing to future EWM averages, preventing rested-starters blowouts from contaminating next season's early-week features. Confirmed via schema check (`game_type` column cleanly separates REG/WC/DIV/CON/SB) and a synthetic leakage test. **Measured effect: no statistically significant change to accuracy** (kept anyway — theoretically sound, zero cost, harmless). Applied in *both* `build_rolling_features.py` and `build_drive_rolling_features.py`. **Correction (2026-09-14):** an earlier revision of this file called the drive-level version an "incomplete fix" because the `.where()` step looked absent. A previous pass through this document then over-corrected, claiming commit `2dc3f67` had resolved it. Both were wrong. `2dc3f67` did add `.where(~finale_mask)`, but the same commit made `add_pregame_rolling_drive_features` read `season`/`week`, which `main()` never merged in from schedules (`drive_stats.parquet` carries neither). The stage therefore **crashed with `KeyError: 'season'` on every run from `2dc3f67` onward**, and `team_drive_rolling_features.parquet` on disk was left stale from before that commit. Nothing detected it: there was no leakage test for the drive path, and its only consumer (Monte Carlo) was not being run. Found by `src/features/build_all.py` on first execution. Fixed by adding `season`/`week` to the schedules merge, and covered now by `tests/test_drive_rolling_leakage.py` (4 tests, mutation-verified). Lesson: a code-reading pass confirmed the fix was present but could not confirm the stage could *execute* — running it was what found the bug.
-- **Pipeline runner + provenance:** `python -m src.features.build_all` runs all 9 feature stages in verified dependency order (~51s end to end on the operator's machine, from an existing `data/raw/` snapshot) and writes `data/processed/_manifest.json` recording git sha, per-stage timing, row counts and output hashes. `tests/test_pipeline_freshness.py` fails if any output is older than an input or has been modified out of band. Added after `model_table.parquet` was found carrying a timestamp 94 minutes older than the table it derives from. Feature builds are cheap; the expensive step is GP model fitting, not feature construction.
+- **Pipeline runner + provenance:** `python -m src.features.build_all` runs all 11 feature stages in verified dependency order (~47s end to end on the operator's machine, from an existing `data/raw/` snapshot) and writes `data/processed/_manifest.json` recording git sha, per-stage timing, row counts and output hashes. `tests/test_pipeline_freshness.py` fails if any output is older than an input or has been modified out of band. Added after `model_table.parquet` was found carrying a timestamp 94 minutes older than the table it derives from. Feature builds are cheap; the expensive step is GP model fitting, not feature construction.
 - **Baseline out-of-sample performance (Linear/Poisson/GP on current feature set):** home_rmse ≈ 9.52–9.54, away_rmse ≈ 9.24–9.25 (walk-forward, min_train_seasons=2, ~1,426 test games spanning 2021–2026).
 
 ## Closed Null Results — Do Not Re-Propose Without New Evidence
@@ -18,7 +18,7 @@ All of the following were built, leakage-tested, and evaluated via standalone fa
 
 1. **Starting QB identity features** (`build_qb_rolling_features.py`, EWM QB-level EPA/completion%/success rate, merged by identified starter). Tested on Linear Regression: slightly worse RMSE (+0.05), not bootstrapped but consistent with the mechanism below. Leading hypothesis: redundant with team-level EPA (QB performance already substantially drives team EPA), not adding independent information. **87.9% starter-identification coverage** — no live data source exists yet for future/undetermined starters; this remains a blocker for ever using this in production regardless of accuracy findings.
 
-2. **Pass/rush EPA decomposition** (splitting blended `off_epa_per_play`/`def_epa_per_play_allowed` into pass-only/rush-only components, replacing not adding). Tested on Linear, Poisson, RF: consistently worse. **Confirmed statistically real (not noise) via bootstrap on Linear** (home_rmse delta +0.037, 95% CI [+0.0058, +0.0685], excludes zero). Leading hypothesis: splitting a full-game average into pass-only/rush-only subsets roughly halves the effective play-count per component, increasing per-game measurement noise more than the added granularity helps.
+2. **Pass/rush EPA decomposition** (splitting blended `off_epa_per_play`/`def_epa_per_play_allowed` into pass-only/rush-only components, replacing not adding). Tested on Linear, Poisson, RF: consistently worse. **Confirmed statistically real (not noise) via bootstrap on Linear** (home_rmse delta +0.037, 95% CI [+0.0058, +0.0685], excludes zero). Leading hypothesis: splitting a full-game average into pass-only/rush-only subsets roughly halves the effective play-count per component, increasing per-game measurement noise more than the added granularity helps. **REOPENED AND SUPERSEDED 2026-09-17 — this entry is no longer a closed null result. See "Pass/Rush Split v2" below. The rejection above was measured on unregularized OLS, the estimator this project diagnosed as broken the following day, against a 16-column base with no `injury_impact`. A volume-weighted, shrunk rebuild is now IN PRODUCTION.**
 
 3. **CPOE (completion % over expectation)**, added alongside blended EPA. Tested on Linear, Poisson: consistently worse (+0.03 RMSE range). Not bootstrap-tested individually but directionally consistent with #2. Leading hypothesis: CPOE measures accuracy relative to difficulty, not points — may correlate only weakly with the actual prediction target.
 
@@ -94,7 +94,7 @@ Gaussian Process was run separately (26 min); everything else is under 4 minutes
 | poisson | 22s | | **gaussian_process** | **1573s (26 min)** |
 | xgboost | 25s | | | |
 
-Feature rebuild is 51s for all 9 stages. GP alone costs more than every other
+Feature rebuild is ~47s for all 11 stages. GP alone costs more than every other
 model combined, by roughly 3x.
 
 **Full set, n=1426 (2021-2026).** margin/total are the betting-relevant
@@ -415,6 +415,133 @@ right is an empirical question that Week 2's results will start to answer.
 direction is shrinking early-season features toward a PRIOR-SEASON team rating
 rather than toward recent games -- that keeps team identity while refusing to
 over-read one game, and is a different mechanism from anything tried here.
+
+## Pass/Rush Split v2: A Reopened Null Result, Shipped Without Clearing The Gate (2026-09-17)
+
+The first idea in this document's closed-null-results list has been rebuilt and
+promoted. Recorded in full, because it is the first time a "closed" finding here
+turned out to be an artifact of the measurement rather than of the football --
+and because it shipped under an explicit operator override rather than on
+evidence.
+
+**Why it was reopened.** Two defects in the original test, both verifiable from
+git rather than from memory:
+
+1. `src/experiments/test_pass_rush_split_only.py` uses
+   `sklearn.linear_model.LinearRegression` -- ordinary least squares, no
+   regularization. It was committed in `81c48d9` (2026-09-14). The feature
+   saturation diagnosis landed the NEXT DAY in `3222086` (2026-09-15) and
+   concluded that this exact estimator is unfit for p~20 / n~1900 with
+   correlated inputs, degrading monotonically as features are added. The
+   pass/rush verdict was taken with an instrument this project subsequently
+   declared broken, and the experiment added four net columns to it.
+2. The base it was compared against was the 16-column set. `injury_impact` did
+   not exist yet.
+
+The recorded diagnosis -- that splitting halves the effective play count and
+raises measurement noise -- was CORRECT. v1 simply did nothing about it.
+
+**How much noise, exactly.** Measured by variance decomposition over 224
+team-seasons (`src/experiments/tune_split_shrinkage.py`):
+
+| split | sigma^2/play | var(true talent) | k (plays) |
+|---|---|---|---|
+| off pass EPA/play | 2.548 | 0.01123 | 227 |
+| off rush EPA/play | 1.029 | 0.00347 | 297 |
+| def pass EPA/play allowed | 2.545 | 0.00599 | 425 |
+| def rush EPA/play allowed | 1.033 | 0.00192 | 538 |
+
+k is the play count at which a team's own rate and the league prior deserve
+equal weight. A team sees ~36 pass and ~26 rush plays a game, so after four
+games its own passing number has earned roughly a QUARTER of the weight, and
+after a full season under two thirds. v1 handed the raw four-game number to the
+model at face value. Defence needs markedly more shrinkage than offence, which
+matches the independently measured persistence gap (split-half r 0.33 vs 0.53).
+
+**What v2 does differently** (`src/features/build_split_efficiency.py`):
+
+- **volume weighting** -- the estimate is a recency-weighted rate per PLAY,
+  not a recency-weighted mean of per-game rates. A 38-carry game now outweighs a
+  9-carry game because it is more evidence. v1's estimator is the special case
+  where every play count is 1.
+- **empirical-Bayes shrinkage** toward a recency-weighted LEAGUE rate, sized by
+  the k values above and by the effective play count actually behind each
+  number. The league prior is itself computed strictly from prior games, so it
+  tracks the era without seeing the future.
+- **the blend is REPLACED, not kept.** This changed within the same day and the
+  reversal is worth recording. The split first shipped with blended
+  `pregame_off_epa_per_play` / `pregame_def_epa_per_play` retained alongside it,
+  on the argument that the blend is the lower-variance measurement (~62 plays
+  against ~36 and ~26) and that discarding it was v1's mistake. The operator
+  overruled that on duplication grounds: the blend and the split describe the
+  same efficiency at different grains, correlating 0.86 (pass) and 0.58 (rush)
+  on offence, 0.78 and 0.45 on defence, and an additive model handed two
+  descriptions of one quantity splits the credit between them.
+
+  Measured cost of removing it: none, and measured tightly enough to say so.
+  Paired bootstrap, blend-present vs blend-absent, both carrying the split:
+
+  | model | delta | 95% CI | P(better) |
+  |---|---|---|---|
+  | Poisson | -0.0000 | [-0.0136, +0.0134] | 50.0% |
+  | RidgeCV | +0.0019 | [-0.0053, +0.0091] | 30.6% |
+
+  These are the two TIGHTEST intervals in the whole experiment -- +/-0.009 on
+  Ridge against +/-0.035 for the base comparisons -- because the two feature
+  sets differ only by four columns that are 0.86-correlated with columns already
+  present. So this is not the usual "cannot resolve it at n=1976" null. It is a
+  positive finding that the blend contributed nothing: Poisson's delta is
+  exactly zero to four decimals, and Ridge's worst case is under a hundredth of
+  a point of RMSE.
+
+  The variance argument that motivated keeping it is now handled where it
+  arises -- inside the estimator, by volume weighting and shrinkage -- rather
+  than by carrying a coarser second copy in the feature set.
+  `tests/test_feature_cols.py` asserts the blend is ABSENT and that each
+  side/unit is described by exactly two EPA columns, so it cannot drift back.
+
+**Result** (paired bootstrap, 5,000 resamples over games, pooled home+away,
+n=1976 completed games, production estimators):
+
+| comparison | base | v2 | delta | 95% CI | verdict |
+|---|---|---|---|---|---|
+| RidgeCV, base -> base+split | 9.3861 | 9.3742 | -0.0121 | [-0.0343, +0.0105] | noise, P(better) 86.0% |
+| Poisson, base -> base+split | 9.3708 | 9.3668 | -0.0041 | [-0.0352, +0.0269] | noise, P(better) 59.6% |
+| OLS, v1's design (blend REPLACED) | 9.3943 | 9.3851 | -0.0094 | [-0.0500, +0.0325] | noise |
+
+**Read this carefully, because it says three separate things.**
+
+1. v2 does NOT clear the promotion gate. Both CIs span zero. It is not a
+   confirmed improvement and must not be described as one.
+2. v1's confirmed REGRESSION is gone. The sign has flipped from +0.037
+   (CI excluding zero) to -0.012. The damage was real and has been removed.
+3. The third row is the interesting one: v1's own design, on v1's own
+   estimator, no longer reproduces v1's regression either (-0.0094, spans
+   zero). So part of the original result was never about the pass/rush split
+   at all -- it was the old feature set and the old estimator interacting. The
+   C1-C8 fixes, the ridge switch and `injury_impact` changed the ground the
+   comparison stood on.
+
+**Promotion status: SHIPPED BY OPERATOR OVERRIDE, not by evidence.** The
+operator directed promotion regardless of the bootstrap outcome, and it is in
+`FEATURE_COLS`. This is a deliberate exception to the project's own promotion
+gate and is logged as such so nobody later mistakes it for a confirmed win. The
+defensible reading: it is free (no measured harm, 1.4s of build time), it is
+directionally positive on both models, and P(better) = 86% on Ridge is
+suggestive but short of the bar.
+
+**If it is ever reassessed**, the question to ask is not "does it help" -- that
+has been asked and the answer is "cannot tell at n=1976." Ask instead whether
+the MATCHUP interaction helps, which is the part additive models structurally
+cannot use: a pass-efficient offence against a pass-vulnerable defence is worth
+more than either number alone, and Linear/Poisson can only add them. That is an
+untried mechanism, not a re-run of this one.
+
+**Do NOT re-try:** re-adding blended EPA next to the split (tried and removed
+2026-09-17, zero measured benefit, and a test now pins it out); adding raw
+unshrunk split columns (that is v1 with extra steps); collapsing the four k
+constants to one number (defence genuinely needs more shrinkage than offence and
+a test asserts it).
 
 ## Real, Unresolved Gaps (Worth Pursuing With New Data or New Direction, Not New Cuts of Old Data)
 

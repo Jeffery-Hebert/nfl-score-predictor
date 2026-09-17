@@ -12,7 +12,7 @@ from pathlib import Path
 # Single source of truth -- this list used to be duplicated here by hand and
 # had to be kept in sync with src/models/common.py. See that module's docstring.
 from src.models.common import BASE_FEATURE_COLS as FEATURE_COLS
-from src.models.common import INJURY_FEATURE_COLS
+from src.models.common import INJURY_FEATURE_COLS, SPLIT_FEATURE_COLS
 
 
 def main():
@@ -49,6 +49,25 @@ def main():
     )
     merged = merged.merge(inj_home, on=["game_id", "home_team"], how="left")
     merged = merged.merge(inj_away, on=["game_id", "away_team"], how="left")
+
+    # Pass/rush efficiency split. Same grain and same join shape as the injury
+    # features above; separate table because the estimator is different (volume
+    # weighted and shrunk, not a plain EWM) -- see build_split_efficiency.py.
+    split = pd.read_parquet("data/processed/split_efficiency.parquet")
+    split_home = split[["game_id", "team"] + SPLIT_FEATURE_COLS].rename(
+        columns={
+            **{c: f"home_{c}" for c in SPLIT_FEATURE_COLS},
+            "team": "home_team",
+        }
+    )
+    split_away = split[["game_id", "team"] + SPLIT_FEATURE_COLS].rename(
+        columns={
+            **{c: f"away_{c}" for c in SPLIT_FEATURE_COLS},
+            "team": "away_team",
+        }
+    )
+    merged = merged.merge(split_home, on=["game_id", "home_team"], how="left")
+    merged = merged.merge(split_away, on=["game_id", "away_team"], how="left")
 
     schedules = pd.read_parquet("data/raw/schedules.parquet")
     # C5: went_to_ot is a TRAINING-side column, never a feature. It is 0%

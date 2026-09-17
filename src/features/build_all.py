@@ -80,10 +80,16 @@ STAGES = [
         "output": "data/processed/injury_features.parquet",
     },
     {
+        "module": "src.features.build_split_efficiency",
+        "inputs": ["data/processed/team_game_stats.parquet", CONFIG],
+        "output": "data/processed/split_efficiency.parquet",
+    },
+    {
         "module": "src.features.build_game_features",
         "inputs": [
             "data/processed/team_rolling_features.parquet",
             "data/processed/injury_features.parquet",
+            "data/processed/split_efficiency.parquet",
             RAW_SCHEDULES,
         ],
         "output": "data/processed/model_table.parquet",
