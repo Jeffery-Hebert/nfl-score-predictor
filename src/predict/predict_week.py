@@ -151,9 +151,75 @@ def assert_training_is_current(train: pd.DataFrame, kickoff: pd.Timestamp) -> in
     return (kickoff - train["gameday"].max()).days
 
 
+def kickoff_utc(game_ids) -> pd.Series:
+    """Actual kickoff instant per game, indexed by game_id.
+
+    gameday alone is a date, which is too coarse to decide whether a game has
+    started: a Thursday 20:15 ET kickoff and the Thursday morning prediction run
+    share a date. Same construction as build_injury_features.kickoff_times().
+    """
+    s = pd.read_parquet(SCHEDULES)
+    s = s[s["game_id"].isin(list(game_ids))]
+    ts = pd.to_datetime(
+        s["gameday"].astype(str) + " " + s["gametime"].fillna("13:00"), errors="coerce"
+    )
+    ts = ts.dt.tz_localize(
+        "US/Eastern", ambiguous="NaT", nonexistent="NaT"
+    ).dt.tz_convert("UTC")
+    return pd.Series(ts.to_numpy(), index=s["game_id"].to_numpy())
+
+
+def freeze_started_games(fresh: pd.DataFrame, path: Path, now) -> pd.DataFrame:
+    """Keep the prediction a game already had if it has kicked off.
+
+    Why this exists. predict_week writes ONE parquet per week and used to
+    overwrite it wholesale. That is fine while a week is run once, and actively
+    destructive once it is run several times across the week -- which is exactly
+    what predicting Thursday, Sunday and Monday games at their own lead times
+    requires. A Monday run would otherwise rewrite the Thursday game's forecast
+    three days AFTER it was played, leaving a file that claims to have predicted
+    games it had already seen the results of.
+
+    That is the one thing this project's records are supposed to guarantee. The
+    README puts it as "written once, before kickoff, and read back unchanged",
+    and the ledger's whole argument is that a parquet is a dated claim rather
+    than a retrospective one.
+
+    So: a row whose kickoff has passed is carried over from the existing file
+    verbatim, including its original generated_at. Only games that have not yet
+    started are re-predicted. Re-running is therefore idempotent for the past
+    and refreshing for the future, and generated_at becomes per-game rather than
+    per-file -- each row records when THAT forecast was made.
+    """
+    if not path.exists():
+        return fresh
+
+    prior = pd.read_parquet(path)
+    if "kickoff" not in prior.columns:
+        # Written before this column existed; recover it rather than discarding
+        # the record.
+        prior["kickoff"] = prior["game_id"].map(kickoff_utc(prior["game_id"]))
+    prior["kickoff"] = pd.to_datetime(prior["kickoff"], utc=True)
+
+    started = prior[prior["kickoff"].notna() & (prior["kickoff"] <= now)]
+    if started.empty:
+        return fresh
+
+    kept = fresh[~fresh["game_id"].isin(started["game_id"])]
+    print(
+        f"  preserving {len(started)} already-started game(s) from the existing "
+        f"file; re-predicting {len(kept)}"
+    )
+    merged = pd.concat([started, kept], ignore_index=True)
+    # Union the columns so a schema change between runs cannot drop a record.
+    return merged.reindex(
+        columns=list(dict.fromkeys(list(fresh.columns) + list(prior.columns)))
+    ).sort_values("gameday")
+
+
 def market_reference(game_ids) -> pd.DataFrame:
     """Closing spread/total and the score pair they imply. Reference only."""
-    s = pd.read_parquet("data/raw/schedules.parquet")
+    s = pd.read_parquet(SCHEDULES)
     s = s[s["game_id"].isin(game_ids)][
         ["game_id", "gametime", "spread_line", "total_line"]
     ].copy()
@@ -231,12 +297,17 @@ def main():
             out[f"{name}_total"] = (out[f"{name}_home"] + out[f"{name}_away"]).round(DP)
 
     out = out.merge(market_reference(out["game_id"]), on="game_id", how="left")
-    out["generated_at"] = datetime.now(timezone.utc).isoformat()
+    now = pd.Timestamp.now(tz="UTC")
+    out["kickoff"] = out["game_id"].map(kickoff_utc(out["game_id"]))
+    # Per-GAME, not per-file: a week may be predicted several times across the
+    # week, and each row should say when its own forecast was made.
+    out["generated_at"] = now.isoformat()
     out["trained_through"] = str(train["gameday"].max().date())
     out["n_training_games"] = len(train)
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     path = OUT_DIR / f"{season}_wk{week:02d}.parquet"
+    out = freeze_started_games(out, path, now)
     out.to_parquet(path, index=False)
 
     print(

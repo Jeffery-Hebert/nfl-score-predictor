@@ -543,6 +543,60 @@ unshrunk split columns (that is v1 with extra steps); collapsing the four k
 constants to one number (defence genuinely needs more shrinkage than offence and
 a test asserts it).
 
+## When To Run The Weekly Prediction (2026-09-17)
+
+Discovered by `TestUpcomingWeekIsPredictable` on its first run, which is the
+reason that test exists.
+
+**The finding.** `report_status` on the official injury report -- the Out /
+Doubtful / Questionable designation that `injury_impact` is built from -- is not
+populated until the FRIDAY report before Sunday games. Earlier in the week the
+rows exist and carry practice participation, but the status column is mostly
+null:
+
+| week | rows | with report_status |
+|---|---|---|
+| 2026 wk1 (settled) | 182 | 61 |
+| 2026 wk2, pulled Thursday | 194 | **6** |
+| 2025 wk2 (settled) | 256 | 112 |
+
+So a Wednesday or Thursday prediction runs with `injury_impact` at roughly 5-10%
+of its eventual signal. It is the only confirmed feature win in this project and
+its only genuine leading indicator, so that is not a small loss.
+
+**Worse, it fails silently.** Every model imputes missing inputs with the
+training-fold mean. A feature that is null or zero for the upcoming week does
+not raise -- every team receives the same value, the forecast still looks like a
+football score, and the feature has simply stopped contributing. On 2026-09-17
+`injury_impact` was 0.0 for all 32 week-2 teams because the injury pull predated
+that week's report entirely, and nothing in the suite reported it until
+`TestUpcomingWeekIsPredictable` was written. `assert_training_is_current` cannot
+see this: it validates SCORES, never feature inputs.
+
+**Consequence for operations.** `config.yaml` documents a Wednesday retrain
+cadence and the README's weekly loop says Tuesday. Both are wrong for injuries,
+and neither is read by code. A routine now runs the refresh on **Sunday 06:00
+America/Chicago** (`trig_01WhT9vopskUP7qWehv3jmuX`, cron `0 11 * * 0`), which is
+after the Friday report settles and before the 1pm ET kickoffs.
+
+**Two caveats on that schedule, neither fixed:**
+
+1. **DST.** The cron is UTC, so after the November DST change it fires at 05:00
+   local rather than 06:00. Same defect as the comment in
+   `.github/workflows/weekly.yml`. Harmless here -- an hour earlier is still
+   after the Friday report -- but it will drift.
+2. **It marks the week backfilled.** `build_report.week_payload` computes
+   `backfilled = generated_at > min(gameday)`, which is WEEK-level. Any week with
+   a Thursday night game is therefore flagged backfilled by a Sunday re-run, even
+   though 15 of its 16 games have not kicked off. The flag is coarser than the
+   thing it is trying to describe. Making it per-game would be the honest fix and
+   has not been done.
+
+**Open question worth an experiment, not yet run:** whether a Sunday-morning
+prediction actually scores better than a Thursday one. The mechanism is obvious
+and the feature is proven, but the size of the gain is unmeasured. It would need
+both to be generated for the same weeks and compared over a season.
+
 ## Real, Unresolved Gaps (Worth Pursuing With New Data or New Direction, Not New Cuts of Old Data)
 
 - **No injury/inactive/depth-chart data source.** This is the single most-cited real gap across every session — the model has no visibility into who is actually playing, which is the dominant driver of the QB-identity and finale-week findings above. Solving this requires a new data source, not new feature engineering on existing play-by-play.

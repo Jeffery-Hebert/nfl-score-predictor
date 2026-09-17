@@ -243,3 +243,117 @@ class TestUpcomingWeekIsPredictable:
             "the pass/rush split is null for the upcoming week. The backtest "
             "would still pass; only the live forecast is broken."
         )
+
+
+# ------------------------------------------------- freezing started games
+
+# A week is now predicted several times -- Thursday afternoon for the Thursday
+# night game, Sunday morning for the Sunday slate, Monday afternoon for Monday
+# night -- so that every game is forecast on the freshest injury report
+# available before ITS OWN kickoff.
+#
+# predict_week writes one parquet per week, so without a guard the Monday run
+# would rewrite the Thursday game's forecast three days after it was played.
+# The file would then claim to have predicted games whose results it had already
+# seen: the single thing this project's records exist to rule out.
+
+
+class TestFreezeStartedGames:
+    @staticmethod
+    def _row(game_id, kickoff, home=24.0, generated="2026-09-17T12:00:00+00:00"):
+        return {
+            "game_id": game_id,
+            "gameday": pd.Timestamp(kickoff).tz_localize(None).normalize(),
+            "kickoff": pd.Timestamp(kickoff, tz="UTC"),
+            "combined_home": home,
+            "combined_away": 20.0,
+            "generated_at": generated,
+        }
+
+    def _write(self, tmp_path, rows):
+        path = tmp_path / "2026_wk02.parquet"
+        pd.DataFrame(rows).to_parquet(path, index=False)
+        return path
+
+    def test_a_started_game_keeps_its_original_prediction(self, tmp_path):
+        """THE property. The Thursday game was predicted at 24.0 before kickoff;
+        a later run that would have said 31.0 must not overwrite it."""
+        path = self._write(
+            tmp_path,
+            [
+                self._row("THU", "2026-09-17T23:15:00", home=24.0),
+                self._row("SUN", "2026-09-20T17:00:00", home=20.0),
+            ],
+        )
+        fresh = pd.DataFrame(
+            [
+                self._row("THU", "2026-09-17T23:15:00", home=31.0, generated="LATER"),
+                self._row("SUN", "2026-09-20T17:00:00", home=27.0, generated="LATER"),
+            ]
+        )
+        now = pd.Timestamp("2026-09-20T11:00:00", tz="UTC")  # Sunday morning
+        got = predict_week.freeze_started_games(fresh, path, now).set_index("game_id")
+
+        assert got.loc["THU", "combined_home"] == 24.0, (
+            "the Thursday game's forecast was rewritten after it kicked off -- "
+            "the record now claims a prediction it did not make"
+        )
+        assert got.loc["THU", "generated_at"] != "LATER", (
+            "generated_at was overwritten, so the file would misreport WHEN the "
+            "Thursday forecast was made"
+        )
+        assert (
+            got.loc["SUN", "combined_home"] == 27.0
+        ), "the Sunday game had not kicked off and should have been refreshed"
+
+    def test_nothing_is_frozen_before_any_kickoff(self, tmp_path):
+        path = self._write(
+            tmp_path, [self._row("THU", "2026-09-17T23:15:00", home=24.0)]
+        )
+        fresh = pd.DataFrame([self._row("THU", "2026-09-17T23:15:00", home=31.0)])
+        now = pd.Timestamp("2026-09-17T18:00:00", tz="UTC")  # hours before kickoff
+        got = predict_week.freeze_started_games(fresh, path, now).set_index("game_id")
+        assert got.loc["THU", "combined_home"] == 31.0
+
+    def test_every_game_survives_the_merge(self, tmp_path):
+        path = self._write(
+            tmp_path,
+            [
+                self._row("THU", "2026-09-17T23:15:00"),
+                self._row("SUN", "2026-09-20T17:00:00"),
+                self._row("MON", "2026-09-22T00:15:00"),
+            ],
+        )
+        fresh = pd.DataFrame(
+            [
+                self._row("THU", "2026-09-17T23:15:00"),
+                self._row("SUN", "2026-09-20T17:00:00"),
+                self._row("MON", "2026-09-22T00:15:00"),
+            ]
+        )
+        now = pd.Timestamp("2026-09-20T11:00:00", tz="UTC")
+        got = predict_week.freeze_started_games(fresh, path, now)
+        assert set(got["game_id"]) == {"THU", "SUN", "MON"}
+        assert len(got) == 3, "the merge duplicated or dropped a game"
+
+    def test_a_first_run_with_no_existing_file_is_unchanged(self, tmp_path):
+        fresh = pd.DataFrame([self._row("THU", "2026-09-17T23:15:00")])
+        got = predict_week.freeze_started_games(
+            fresh, tmp_path / "missing.parquet", pd.Timestamp.now(tz="UTC")
+        )
+        assert got.equals(fresh)
+
+    def test_a_file_written_before_kickoff_existed_is_not_discarded(self, tmp_path):
+        """Older records carry no kickoff column. They must be recovered from
+        the schedule, not silently dropped."""
+        path = tmp_path / "2026_wk02.parquet"
+        row = self._row("THU", "2026-09-17T23:15:00", home=24.0)
+        del row["kickoff"]
+        pd.DataFrame([row]).to_parquet(path, index=False)
+        fresh = pd.DataFrame([self._row("THU", "2026-09-17T23:15:00", home=31.0)])
+        # No schedules lookup can resolve a fake game_id, so kickoff stays NaT
+        # and the row is treated as not-yet-started rather than lost.
+        got = predict_week.freeze_started_games(
+            fresh, path, pd.Timestamp("2026-09-20T11:00:00", tz="UTC")
+        )
+        assert set(got["game_id"]) == {"THU"}, "the legacy row vanished"
