@@ -252,16 +252,53 @@ def main():
     target = df[(df["season"] == season) & (df["week"] == week)].copy()
     if target.empty:
         sys.exit(f"ERROR: no games found for season {season} week {week}.")
-    kickoff = target["gameday"].min()
+
+    # Which games are still ahead of us. A week is predicted several times --
+    # Thursday for the Thursday night game, Sunday for the main slate, Monday
+    # for Monday night -- so "the games this run is actually forecasting" is
+    # usually a subset of the week.
+    now = pd.Timestamp.now(tz="UTC")
+    target["kickoff"] = target["game_id"].map(kickoff_utc(target["game_id"]))
+    pending = target[target["kickoff"].isna() | (target["kickoff"] > now)]
+
+    if pending.empty:
+        sys.exit(
+            f"ERROR: every game in season {season} week {week} has already "
+            "kicked off. There is nothing left to forecast, and writing one now "
+            "would be a backfill, not a prediction.\n"
+            "Grade what is already on file instead:\n"
+            "  python -m src.predict.build_report"
+        )
+
+    # The cutoff is the first PENDING kickoff, not the first game of the week.
+    #
+    # Those differ once a week is predicted more than once, and pinning to the
+    # week meant a Monday run refit on exactly the data the Thursday run had --
+    # 1976 games rather than 1991, throwing away that same week's Thursday and
+    # Sunday results while forecasting Monday night. Leakage-safe but needlessly
+    # blind, and this project treats "the model cannot see what it should" as
+    # the equal and opposite failure to leakage (tests/test_training_completeness.py).
+    kickoff = pending["gameday"].min()
 
     # Strictly prior completed games -- the same rule the backtest enforces.
     train = df[df["gameday"] < kickoff].dropna(subset=["home_score", "away_score"])
     gap = assert_training_is_current(train, kickoff)
 
-    print(f"Predicting season {season}, week {week} -- {len(target)} games")
+    # Forecast only what has not started. Games that already kicked off keep the
+    # record they were given beforehand (see freeze_started_games); a game that
+    # started with no such record does not get one invented after the fact.
+    started_without_record = len(target) - len(pending)
+    target = pending
+
+    print(f"Predicting season {season}, week {week} -- {len(target)} game(s) pending")
+    if started_without_record:
+        print(
+            f"  {started_without_record} game(s) in this week have already kicked off "
+            "and are not being re-forecast"
+        )
     print(
         f"  training on {len(train)} completed games through "
-        f"{train['gameday'].max().date()} ({gap} days before kickoff)"
+        f"{train['gameday'].max().date()} ({gap} days before the first pending kickoff)"
     )
     if target["home_score"].notna().any():
         n = int(target["home_score"].notna().sum())
@@ -297,7 +334,6 @@ def main():
             out[f"{name}_total"] = (out[f"{name}_home"] + out[f"{name}_away"]).round(DP)
 
     out = out.merge(market_reference(out["game_id"]), on="game_id", how="left")
-    now = pd.Timestamp.now(tz="UTC")
     out["kickoff"] = out["game_id"].map(kickoff_utc(out["game_id"]))
     # Per-GAME, not per-file: a week may be predicted several times across the
     # week, and each row should say when its own forecast was made.

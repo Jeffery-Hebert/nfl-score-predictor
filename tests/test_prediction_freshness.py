@@ -357,3 +357,77 @@ class TestFreezeStartedGames:
             fresh, path, pd.Timestamp("2026-09-20T11:00:00", tz="UTC")
         )
         assert set(got["game_id"]) == {"THU"}, "the legacy row vanished"
+
+
+class TestTrainingCutoffFollowsPendingGames:
+    """The cutoff must track the first game still to be played, not the first
+    game of the week.
+
+    Those are the same thing on a Thursday run and diverge afterwards. Pinned to
+    the week, a Monday run refits on exactly what the Thursday run had -- it
+    discards that same week's Thursday and Sunday results while forecasting
+    Monday night. Leakage-safe, but blind in the way
+    tests/test_training_completeness.py exists to forbid.
+    """
+
+    @staticmethod
+    def _week():
+        return pd.DataFrame(
+            {
+                "game_id": ["THU", "SUN1", "SUN2", "MON"],
+                "gameday": pd.to_datetime(
+                    ["2026-09-17", "2026-09-20", "2026-09-20", "2026-09-21"]
+                ),
+                "kickoff": pd.to_datetime(
+                    [
+                        "2026-09-18T00:15Z",
+                        "2026-09-20T17:00Z",
+                        "2026-09-20T17:00Z",
+                        "2026-09-22T00:15Z",
+                    ]
+                ),
+            }
+        )
+
+    @staticmethod
+    def _cutoff(week, now):
+        """The selection predict_week.main() performs."""
+        pending = week[week["kickoff"].isna() | (week["kickoff"] > now)]
+        return pending["gameday"].min(), len(pending)
+
+    def test_thursday_run_uses_the_first_game_of_the_week(self):
+        cutoff, n = self._cutoff(self._week(), pd.Timestamp("2026-09-17T18:00Z"))
+        assert n == 4, "nothing has kicked off yet"
+        assert cutoff == pd.Timestamp("2026-09-17")
+
+    def test_sunday_run_can_train_on_the_thursday_result(self):
+        cutoff, n = self._cutoff(self._week(), pd.Timestamp("2026-09-20T11:00Z"))
+        assert n == 3, "only the Thursday game has been played"
+        assert cutoff == pd.Timestamp("2026-09-20"), (
+            "cutoff is still pinned to Thursday, so the Sunday run cannot train "
+            "on Thursday night's result"
+        )
+
+    def test_monday_run_can_train_on_the_whole_weekend(self):
+        cutoff, n = self._cutoff(self._week(), pd.Timestamp("2026-09-21T18:00Z"))
+        assert n == 1, "only Monday night is left"
+        assert cutoff == pd.Timestamp("2026-09-21"), (
+            "cutoff is pinned to the week's first game, so the Monday run "
+            "discards this week's Thursday and Sunday results"
+        )
+
+    def test_cutoff_advances_monotonically_through_the_week(self):
+        week = self._week()
+        cutoffs = [
+            self._cutoff(week, pd.Timestamp(t))[0]
+            for t in ("2026-09-17T18:00Z", "2026-09-20T11:00Z", "2026-09-21T18:00Z")
+        ]
+        assert cutoffs == sorted(cutoffs), f"cutoff went backwards: {cutoffs}"
+        assert len(set(cutoffs)) == 3, "later runs are not seeing more history"
+
+    def test_a_fully_played_week_leaves_nothing_pending(self):
+        _, n = self._cutoff(self._week(), pd.Timestamp("2026-09-30T00:00Z"))
+        assert n == 0, (
+            "predict_week must exit rather than write a forecast for a week that "
+            "is entirely in the past -- that is a backfill, not a prediction"
+        )
