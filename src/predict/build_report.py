@@ -212,6 +212,7 @@ def summarize(data: dict) -> None:
     print(f"  opens at the most recent week")
     print(f"\n  firefox {OUT}     (or xdg-open / open / double-click)")
 
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--open", action="store_true", help="launch the page when done")
