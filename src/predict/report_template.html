@@ -227,6 +227,20 @@ const fmt = n => n.toFixed(1);
 const signed = n => (n > 0 ? "+" : n < 0 ? "−" : "±") + Math.abs(n).toFixed(1);
 const slug = w => `${w.season}-w${String(w.week).padStart(2,"0")}`;
 
+// Games are already ordered by kickoff server-side. Render the time in the
+// READER's timezone rather than baking one in -- the page is a single file that
+// gets emailed and opened on phones in other zones. Falls back to the bare date
+// for weeks predicted before kickoff times were recorded.
+const kickLabel = g => {
+  if (!g.kickoff_ts) return g.kickoff;
+  const d = new Date(g.kickoff_ts);
+  if (isNaN(d)) return g.kickoff;
+  return d.toLocaleString(undefined, {
+    weekday: "short", month: "short", day: "numeric",
+    hour: "numeric", minute: "2-digit",
+  });
+};
+
 let idx = DATA.weeks.length - 1;
 
 function fromHash(){
@@ -382,7 +396,7 @@ function drawBody(w){
     m.className = "matchup";
     m.append(document.createTextNode(`${g.away} @ ${g.home}`));
     const dt = document.createElement("span");
-    dt.className = "dt"; dt.textContent = g.kickoff;
+    dt.className = "dt"; dt.textContent = kickLabel(g);
     m.append(dt);
     tr.append(m);
 
@@ -447,7 +461,7 @@ function drawCards(w){
     const h = document.createElement("h3");
     h.textContent = `${g.away} @ ${g.home}`;
     const when = document.createElement("div");
-    when.className = "when"; when.textContent = g.kickoff;
+    when.className = "when"; when.textContent = kickLabel(g);
     c.append(h, when);
 
     if (g.actual){

@@ -23,6 +23,11 @@ import pytest
 
 from src.predict.build_report import grade, week_payload
 
+# week_payload resolves kickoff times to order the slate. These fixtures use
+# synthetic game_ids that no schedule can resolve, so an empty index is the
+# honest input -- it also exercises the fallback path.
+NO_KICKOFFS = pd.Series(dtype="datetime64[ns, UTC]")
+
 
 def preds(home, away):
     return {"home": home, "away": away}
@@ -126,7 +131,9 @@ class TestWeekPayload:
     def test_ungraded_week_has_no_grades(self, tmp_path):
         path, _ = fake_week(tmp_path, "2025-09-05T12:00:00+00:00")
         w = week_payload(
-            path, pd.DataFrame(columns=["game_id", "home_score", "away_score"])
+            path,
+            pd.DataFrame(columns=["game_id", "home_score", "away_score"]),
+            NO_KICKOFFS,
         )
         assert w["n_graded"] == 0
         assert w["summary"] == {}
@@ -134,7 +141,7 @@ class TestWeekPayload:
 
     def test_graded_week_summarizes_every_model(self, tmp_path):
         path, actuals = fake_week(tmp_path, "2025-09-05T12:00:00+00:00")
-        w = week_payload(path, actuals)
+        w = week_payload(path, actuals, NO_KICKOFFS)
         assert w["n_graded"] == 2
         # combined picked home in both; right once, wrong once
         assert w["summary"]["combined"]["winners"] == 1
@@ -148,17 +155,104 @@ class TestWeekPayload:
         record of what was claimed before kickoff."""
         path, actuals = fake_week(tmp_path, "2025-09-05T12:00:00+00:00")
         before = pd.read_parquet(path)["combined_home"].tolist()
-        week_payload(path, actuals)
+        week_payload(path, actuals, NO_KICKOFFS)
         after = pd.read_parquet(path)["combined_home"].tolist()
         assert before == after
 
     def test_prediction_before_kickoff_is_not_flagged(self, tmp_path):
         path, actuals = fake_week(tmp_path, "2025-09-05T12:00:00+00:00")
-        assert week_payload(path, actuals)["backfilled"] is False
+        assert week_payload(path, actuals, NO_KICKOFFS)["backfilled"] is False
 
     def test_prediction_after_kickoff_is_flagged(self, tmp_path):
         """A week predicted after the fact is still out of sample, but nothing
         stopped it from being regenerated until it looked good. The page has to
         say so."""
         path, actuals = fake_week(tmp_path, "2026-09-15T12:00:00+00:00")
-        assert week_payload(path, actuals)["backfilled"] is True
+        assert week_payload(path, actuals, NO_KICKOFFS)["backfilled"] is True
+
+
+class TestSlateOrdering:
+    """Games must be listed in the order they kick off.
+
+    Row order in a week's parquet is whatever predict_week produced -- not
+    chronological, and not even stable across runs now that a week is written
+    three times as its slates come up. Week 2's Thursday night game sat fourth
+    on the page. gameday cannot fix it on its own either: a dozen games share a
+    Sunday and kick off across seven hours.
+    """
+
+    @staticmethod
+    def _week(tmp_path, rows, with_kickoff=True):
+        recs = []
+        for i, (gid, kick) in enumerate(rows):
+            # Distinct team codes per row so uniqueness assertions test the
+            # code rather than the fixture's naming.
+            r = {
+                "game_id": gid,
+                "season": 2026,
+                "week": 2,
+                "gameday": pd.Timestamp(kick).tz_localize(None).normalize(),
+                "home_team": f"H{i:02d}",
+                "away_team": f"A{i:02d}",
+                "combined_home": 24.0,
+                "combined_away": 20.0,
+                "generated_at": "2026-09-17T12:00:00+00:00",
+                "trained_through": "2026-09-14",
+                "n_training_games": 1976,
+            }
+            if with_kickoff:
+                r["kickoff"] = pd.Timestamp(kick, tz="UTC")
+            recs.append(r)
+        path = tmp_path / "2026_wk02.parquet"
+        pd.DataFrame(recs).to_parquet(path, index=False)
+        return path
+
+    # deliberately shuffled, with the Thursday game buried in the middle
+    ROWS = [
+        ("SUN_LATE", "2026-09-20T20:25:00"),
+        ("SUN_EARLY", "2026-09-20T17:00:00"),
+        ("THU_NIGHT", "2026-09-18T00:15:00"),
+        ("MON_NIGHT", "2026-09-22T00:15:00"),
+        ("SUN_NIGHT", "2026-09-21T00:20:00"),
+    ]
+    EXPECTED = ["THU_NIGHT", "SUN_EARLY", "SUN_LATE", "SUN_NIGHT", "MON_NIGHT"]
+
+    def test_games_are_ordered_by_kickoff(self, tmp_path):
+        path = self._week(tmp_path, self.ROWS)
+        w = week_payload(path, pd.DataFrame(columns=["game_id"]), NO_KICKOFFS)
+        order = [g["kickoff_ts"] for g in w["games"]]
+        assert order == sorted(order), f"not chronological: {order}"
+
+    def test_same_day_games_are_ordered_by_time_not_just_date(self, tmp_path):
+        """The case gameday alone cannot solve."""
+        path = self._week(
+            tmp_path,
+            [
+                ("LATE_AAA", "2026-09-20T20:25:00"),
+                ("EARLY_BBB", "2026-09-20T17:00:00"),
+            ],
+        )
+        w = week_payload(path, pd.DataFrame(columns=["game_id"]), NO_KICKOFFS)
+        assert w["games"][0]["kickoff_ts"] < w["games"][1]["kickoff_ts"]
+
+    def test_a_week_without_stored_kickoffs_falls_back_to_the_schedule(self, tmp_path):
+        """Weeks predicted before the kickoff column existed still have to sort."""
+        path = self._week(tmp_path, self.ROWS, with_kickoff=False)
+        schedule = pd.Series({gid: pd.Timestamp(k, tz="UTC") for gid, k in self.ROWS})
+        w = week_payload(path, pd.DataFrame(columns=["game_id"]), schedule)
+        order = [g["kickoff_ts"] for g in w["games"]]
+        assert all(o is not None for o in order), "schedule fallback produced no times"
+        assert order == sorted(order)
+
+    def test_unresolvable_kickoffs_do_not_crash_and_sort_last(self, tmp_path):
+        """Neither source knows these games. The page must still render."""
+        path = self._week(tmp_path, self.ROWS, with_kickoff=False)
+        w = week_payload(path, pd.DataFrame(columns=["game_id"]), NO_KICKOFFS)
+        assert len(w["games"]) == len(self.ROWS), "games were dropped"
+        assert all(g["kickoff_ts"] is None for g in w["games"])
+
+    def test_no_game_is_lost_or_duplicated_by_sorting(self, tmp_path):
+        path = self._week(tmp_path, self.ROWS)
+        w = week_payload(path, pd.DataFrame(columns=["game_id"]), NO_KICKOFFS)
+        assert len(w["games"]) == len(self.ROWS)
+        assert len({g["away"] for g in w["games"]}) == len(self.ROWS)

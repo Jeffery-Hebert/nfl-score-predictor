@@ -70,6 +70,31 @@ def load_actuals() -> pd.DataFrame:
     return s[["game_id", "home_score", "away_score"]].dropna(subset=["home_score"])
 
 
+def kickoff_index() -> pd.Series:
+    """Kickoff instant per game_id, for ordering the page.
+
+    Fallback only. predict_week stores a `kickoff` column on every week it
+    writes, and that stored value is preferred -- it is part of the record. This
+    exists for weeks written before that column did, which would otherwise have
+    nothing finer than a date to sort on.
+
+    NOTE: this is the same gameday + gametime -> US/Eastern -> UTC construction
+    as predict_week.kickoff_utc() and build_injury_features.kickoff_times().
+    Three copies is two too many; it is duplicated here rather than imported
+    because predict_week pulls in all four models (and sklearn with them), which
+    would turn this one-second script into a several-second one. Worth
+    consolidating into a shared schedule helper.
+    """
+    s = pd.read_parquet("data/raw/schedules.parquet")
+    ts = pd.to_datetime(
+        s["gameday"].astype(str) + " " + s["gametime"].fillna("13:00"), errors="coerce"
+    )
+    ts = ts.dt.tz_localize(
+        "US/Eastern", ambiguous="NaT", nonexistent="NaT"
+    ).dt.tz_convert("UTC")
+    return pd.Series(ts.to_numpy(), index=s["game_id"].to_numpy())
+
+
 def grade(models: dict, actual: dict) -> dict:
     """Per-model scoring for one finished game."""
     out = {}
@@ -95,12 +120,41 @@ def grade(models: dict, actual: dict) -> dict:
     return out
 
 
-def week_payload(path: Path, actuals: pd.DataFrame) -> dict:
+def week_payload(path: Path, actuals: pd.DataFrame, kickoffs: pd.Series) -> dict:
     df = pd.read_parquet(path).merge(
         actuals.rename(columns={"home_score": "act_home", "away_score": "act_away"}),
         on="game_id",
         how="left",
     )
+
+    # Order the slate the way it is actually played. Rows arrive in whatever
+    # order predict_week produced them, which is neither chronological nor
+    # stable -- week 2's Thursday night game sat fourth. gameday alone cannot
+    # fix it either: a dozen games share a Sunday and kick off across seven
+    # hours. The stored kickoff is authoritative where present, with the
+    # schedule as fallback for weeks written before that column existed.
+    def _utc(values) -> pd.Series:
+        """Coerce to a tz-aware series, whatever comes in.
+
+        Both sources can be wholly unresolvable -- a week written before the
+        column existed, or a schedule that knows none of these game_ids -- and an
+        all-missing map comes back as float64, which cannot be cast to a
+        datetime. Going via the index keeps the dtype right in every case.
+        """
+        return pd.to_datetime(
+            pd.Series(list(values), index=df.index), utc=True, errors="coerce"
+        )
+
+    stored = (
+        _utc(df["kickoff"]) if "kickoff" in df.columns else _utc([pd.NaT] * len(df))
+    )
+    df["_kick"] = stored.fillna(_utc(kickoffs.reindex(df["game_id"])))
+    # gameday breaks ties for anything the schedule could not resolve, and
+    # game_id makes the order deterministic rather than merely sorted.
+    df = df.sort_values(
+        ["_kick", "gameday", "game_id"], kind="stable", na_position="last"
+    ).reset_index(drop=True)
+
     games, graded = [], 0
     for _, r in df.iterrows():
         models = {}
@@ -115,6 +169,12 @@ def week_payload(path: Path, actuals: pd.DataFrame) -> dict:
             "away": r["away_team"],
             "home": r["home_team"],
             "kickoff": str(pd.Timestamp(r["gameday"]).date()),
+            # Full instant when known, so the page can show a real kickoff time
+            # in the reader's own timezone rather than a bare date. Null for
+            # weeks predicted before the column existed; the page falls back.
+            "kickoff_ts": (
+                pd.Timestamp(r["_kick"]).isoformat() if pd.notna(r["_kick"]) else None
+            ),
             "models": models,
             "market": (
                 {
@@ -177,7 +237,8 @@ def build() -> dict:
             "Make one first:  python -m src.predict.predict_week"
         )
     actuals = load_actuals()
-    weeks = [week_payload(f, actuals) for f in files]
+    kickoffs = kickoff_index()
+    weeks = [week_payload(f, actuals, kickoffs) for f in files]
     weeks.sort(key=lambda w: (w["season"], w["week"]))
     return {
         "built_at": datetime.now(timezone.utc).isoformat(),
