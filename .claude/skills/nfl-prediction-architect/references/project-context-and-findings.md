@@ -819,23 +819,61 @@ never picked them up:
 `drive_model_table` carries none of the context columns needed for the last two,
 so `load_table()` joins them from schedules rather than changing production.
 
-**REJECTED ON MEASUREMENT -- field position.** I had called this "the biggest
-unused lever" and that was wrong. `drive_start_yard_line` is 98.7% populated and
-completely unused, and the EP curve is genuinely steep -- 4.70 points per drive
-starting inside the opponent 20 against 1.46 from inside your own 14, a 3.23
-spread. But:
+**FIELD POSITION -- built, tested and measured in the model. Null, but the
+first screen of it was bad and the correction matters more than the verdict.**
 
-    teams differ by only sd 2.07 yards in mean starting field position
-    persistence (split-half): own 0.194, opponent-allowed 0.288
+I screened this out on a regression, called it "~0.2 points of signal", and was
+challenged on it. The challenge was right: the screen conflated THREE questions
+that have different answers, and reporting only the third as though it settled
+all of them was wrong.
 
-At ~0.046 EP per yard that is ~1.0 point of raw game-level variation, of which
-roughly a fifth is predictable. **~0.2 points of real signal.** Exactly the same
-trap as the per-stat half-life idea: a large effect whose BETWEEN-TEAM,
-PERSISTENT component is tiny. A steep curve is not the same as a usable feature.
+  1. DOES FIELD POSITION MATTER PER DRIVE? Enormously. Across deciles, 3.32
+     expected points per drive from the best starting position down to 1.36 from
+     the worst -- a 1.96 spread, monotone. (The 3.23 figure quoted earlier uses
+     fixed-width buckets whose top one holds 730 of 42,917 drives; the decile
+     number is the representative one.) Measured WITHIN team-season, so team
+     quality cannot confound it, the slope is -0.0355 points per drive per yard.
 
-(Note for anyone re-measuring this: take the first SCRIMMAGE play of a drive.
-Using the first play of any kind pulls in kickoffs at the 35 and piles half the
-drives into one bucket, which produces a plausible and entirely wrong curve.)
+  2. DO TEAMS DIFFER? Yes, meaningfully. Team-season averages run from starting
+     at their own 33.3 (BUF 2024) to their own 25.6 (CAR 2023), a 7.7-yard
+     spread worth about 3 points a game.
+
+  3. IS IT KNOWABLE IN ADVANCE? Barely, and this is the only one that bears on a
+     forecast:
+
+         prior FP -> future FP         r = +0.108
+         prior FP -> future points     r = -0.112
+         prior TD rate -> future points r = +0.262
+
+     Field position barely predicts itself. It is produced by opponent punting,
+     turnovers, touchbacks and penalties -- largely luck and opponent, not a team
+     trait.
+
+Also worth having asked and I had not: is it INCREMENTAL over the drive-outcome
+rates the model already carries? Contemporaneously, yes and substantially --
+R^2 0.7793 -> 0.8101, +0.0308. Out of sample against PRIOR rates, +0.0014.
+
+**Settled in the model rather than by regression**
+(`src/experiments/test_field_position_value.py`): field position enters as an
+additive expected-points adjustment at the measured slope, with the offence's
+expected start blended from its own prior field position and the opponent's
+prior field position allowed. Result: **+0.0147, CI [-0.0039, +0.0343],
+P(better) 6%**, and calibration slope degrades 0.986 -> 0.919.
+
+So the verdict stands, but the reason is specifically (3) and nothing else. The
+mechanism is real and large; it is simply not knowable far enough ahead.
+`src/experiments/field_position.py` and its 15 tests are kept so this does not
+need rebuilding, and so the three questions stay separated. One test pins
+r=0.108 explicitly and fails if it ever rises above 0.30 -- if that happens, the
+model test is worth re-running.
+
+**The extraction trap, which produced a plausible and entirely wrong answer on
+my first attempt:** take the first play of a drive and you pick up KICKOFFS at
+the 35, which piles half of all drives into one bucket and flattens the curve.
+The first SCRIMMAGE play is the drive's real start, identified by `down` being
+populated. The wrong version still produced a monotone curve from 4.2 EP down to
+1.4 and nothing about it looked wrong. Verified now against nflverse's own
+`drive_start_yard_line` string, 100% agreement, asserted on real data.
 
 **REJECTED ON MEASUREMENT -- the possession model.** I had claimed the channel
 was dead because predicted drive counts have sd 0.59 against an actual 1.65.

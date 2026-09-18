@@ -350,8 +350,21 @@ def predict_drive_model(model: dict, test: pd.DataFrame):
     ad = test["away_pregame_n_drives"].to_numpy(float)
     af = test["home_pregame_n_drives_faced"].to_numpy(float)
     fb = model["fallback_drives"]
-    home_drives = np.nanmean(np.stack([hd, hf]), axis=0)
-    away_drives = np.nanmean(np.stack([ad, af]), axis=0)
+
+    # nanmean over an all-NaN column warns and returns NaN. The NaN is handled
+    # below by the fallback, but the warning is noise on every fold, so the
+    # all-missing case is answered directly instead.
+    def _blend(a, b):
+        stacked = np.stack([a, b])
+        both_missing = np.isnan(stacked).all(axis=0)
+        out = np.full(stacked.shape[1], np.nan)
+        ok = ~both_missing
+        if ok.any():
+            out[ok] = np.nanmean(stacked[:, ok], axis=0)
+        return out
+
+    home_drives = _blend(hd, hf)
+    away_drives = _blend(ad, af)
     home_drives = np.where(np.isfinite(home_drives), home_drives, fb)
     away_drives = np.where(np.isfinite(away_drives), away_drives, fb)
 
