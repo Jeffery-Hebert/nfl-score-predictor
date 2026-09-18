@@ -621,6 +621,201 @@ prediction actually scores better than a Thursday one. The mechanism is obvious
 and the feature is proven, but the size of the gain is unmeasured. It would need
 both to be generated for the same weeks and compared over a season.
 
+## Seven Relational / Recency Experiments (2026-09-18)
+
+A single session testing every remaining idea on the "how we represent what we
+already know" axis, plus reviving two closed results. One win, six nulls, and
+three corrections to my own reasoning that are worth more than most of the
+numbers.
+
+All of it is in `src/experiments/`; NOTHING was promoted. 99 new tests.
+
+### The headline table
+
+Control is production's own model_table. Paired bootstrap, 5,000 resamples,
+n=1440. Both production estimators, because they disagree in instructive ways.
+
+| arm | Poisson delta | Ridge delta | verdict |
+|---|---|---|---|
+| exp 8w half-life | +0.0575 | +0.0557 | WORSE, both |
+| exp 12w | +0.0187 | +0.0170 | WORSE, both |
+| **exp 17w (= production)** | +0.0004 | -0.0002 | control |
+| exp 26w | +0.0103 | +0.0103 | noise |
+| exp 39w | +0.0444 | +0.0393 | WORSE, both |
+| per-stat half-lives | +0.0202 | +0.0134 | noise, both negative |
+| two-timescale 3w/26w@40% | +0.0011 | -0.0007 | dead tie |
+| two-timescale 2w/34w@30% | +0.0215 | +0.0180 | noise, both negative |
+| two-timescale 2.5w/17w@60% | +0.0198 | +0.0157 | noise, both negative |
+| + matchup interactions | +0.0151 | +0.0062 | WORSE on Poisson |
+| + adjusted ratings v2 | +0.0253 | -0.0008 | WORSE on Poisson |
+| + roster continuity | +0.0486 | +0.0120 | WORSE on Poisson |
+| + all three | +0.0878 | +0.0110 | WORSE on Poisson |
+
+### 1. The 17-week half-life survives a re-sweep. Close the question.
+
+It was chosen before injuries, before ridge, before shrinkage, and shrinkage in
+particular interacts with it. It is still the optimum, on both models, and the
+curve is cleanly unimodal. The re-sweep also validated the harness: the
+rebuilt-at-17w arm reproduces production to within 0.0004 RMSE, so every other
+delta is attributable to its arm rather than to reimplementation drift.
+
+### 2. Per-stat half-lives: no, and the reasoning that motivated them was wrong.
+
+I proposed setting them from split-half r, which ranges 0.23 to 0.70 across the
+stats. That is the wrong statistic. **Split-half r conflates trait drift with
+measurement noise, and the two want OPPOSITE fixes** -- an unstable trait wants
+a short window, a noisy measurement wants a long one, because averaging kills
+noise. Shrinkage already handles the noise half.
+
+The statistic that actually sets a half-life is autocorrelation by LAG. Measured:
+
+    off_success_rate   lag1 0.22  lag4 0.22  lag8 0.20  lag16 0.23
+    off_pass_epa       lag1 0.12  lag4 0.10  lag8 0.13  lag16 0.09
+
+**Flat.** Within a season these traits do not decay at all; the correlation is
+low because one game is a noisy measurement, not because the team changed.
+Fitted per-game half-lives land between 30 and 485 GAMES. The real decay is at
+the season boundary, where rosters turn over -- and a calendar-day exponential
+already applies it (a ~200-day summer costs 0.5^(200/119) = 0.31).
+
+This single measurement explains three separate null results at once: this one,
+tune_halflife's rejection of 4 and 8 weeks, and test_offseason_decay's rejection
+of compressing the summer.
+
+### 3. Two-timescale decay: no. The best mixture is a dead tie.
+
+The operator's stated shape -- last 2-3 weeks dominant, long tail behind -- is
+`two 2.5w/17w@60%` and it is +0.0198 / +0.0157. The best mixture found
+(3w/26w@40%) is -0.0007 to +0.0011: a coin flip with production at P(better)
+43-55%. A single exponential genuinely cannot be both steep and long-tailed, so
+the family was worth testing; it simply has nothing to buy here, for the reason
+in #2.
+
+### 4. Anchoring is a no-op for exponentials. I was wrong about this.
+
+I claimed production's `.shift(1)` mis-anchors the weights at the previous
+game's date. It does, and it does not matter: for a single exponential,
+
+    w_i = 0.5^((A - t_i)/H) = 0.5^(A/H) * 0.5^(-t_i/H)
+
+and the 0.5^(A/H) factor is identical across observations, so it cancels in a
+normalised mean. Moving the anchor rescales every weight equally. It becomes
+real only for a MIXTURE, where two components pick up two different constants.
+
+### 5. Matchup interactions: no, but the mechanism was confirmed.
+
+Four products pairing each offence against the defence it will actually face.
+The prediction was that they should help RIDGE more than POISSON, because a
+Poisson log link ALREADY multiplies feature effects (E[y] = exp(b0)*exp(b1x1)*...)
+while Ridge can only add. Measured: Ridge +0.0062, Poisson +0.0151.
+
+Directionally right -- it hurts Ridge less than half as much -- but "less
+harmful" is not "helps". Poisson's existing multiplicativity is likely part of
+why it leads this benchmark, and that is worth knowing even though the feature
+failed.
+
+### 6. Opponent-adjusted ratings v2: the closest thing to a positive.
+
+v1 adjusted a BLEND of all plays, unweighted by volume, tested as a replacement.
+v2 adjusts pass and rush separately, weights each row by its play count, and is
+tested as an addition. On Ridge it is **-0.0008, P(better) 54%** -- a genuine
+dead heat rather than the clear loss v1 was -- and it improves calibration slope
+1.115 -> 1.098. On Poisson it is +0.0253, clearly worse.
+
+Sanity-checked: the ratings recover known strengths at r > 0.9 on synthetic
+round-robins, and on real data BUF tops adjusted pass offence with MIN and SEA
+the best pass defences.
+
+### 7. Roster continuity: no on accuracy, real on calibration.
+
+Three measures from snap counts -- cross-season carryover, within-season line-up
+stability, snap-weighted tenure. The ONLY arm carrying genuinely new information
+rather than a re-cut of play-by-play.
+
+On Ridge it moves calibration slope **1.115 -> 1.023** (and 1.016 with
+everything), at an RMSE cost inside noise (+0.0120, P 23%). Slope above 1 means
+compressed predictions, which flattens every derived spread, so that is a real
+representational gain RMSE cannot see -- exactly the case for promoting
+something that misses the significance bar.
+
+**It does not survive the synthesis.** Poisson already sits at slope 1.008 with
+BETTER RMSE (9.367 vs Ridge's 9.376), and every arm makes Poisson worse on both
+axes. The calibration gain exists only on a model that is already dominated, so
+there is no configuration here that beats production on either measure.
+
+Also note the saturation signature returning: Poisson's slope degrades
+monotonically 1.008 -> 0.948 -> 0.869 -> 0.798 as columns are added.
+
+**A leakage trap found in the build, worth recording.** `snap_weighted_tenure`
+originally weighted by the CURRENT game's line-up. That both leaks and is
+unservable -- on Wednesday nobody knows who will take snaps on Sunday -- and it
+is precisely what shelved the QB-identity feature. It now uses the most recent
+PRIOR line-up.
+
+### 8. THE ONE WIN: the drive model, revived. 9.608 -> 9.478.
+
+`src/models/unused/monte_carlo.py` was one of five models SIGNIFICANTLY WORSE
+than a no-ML rule (+0.1514 vs baseline, CI excluding zero).
+`src/experiments/drive_model_v2.py` is **+0.0191, CI [-0.0126, +0.0514] --
+statistically indistinguishable from baseline.** Margin RMSE 13.670 -> 13.245,
+home bias -1.34 -> -0.13, and calibration slope 1.013 makes it the
+second-best-calibrated model in the project behind only Poisson.
+
+Five defects, in order of size:
+
+  1. **The Monte Carlo estimated a closed form.** `draws @ POINTS` then `.mean()`
+     approximates n * (p . points), which is exact. 2,000 samples added pure
+     noise to every prediction for zero information. The sampler is retained for
+     DISTRIBUTIONS, which is a drive model's real advantage, but is out of the
+     point prediction's path.
+  2. **No home-field advantage existed at all.** Found by measuring v2, not by
+     reading v1: drive-outcome rates carry no home/away split, so the model had
+     no mechanism to produce one. It predicted a home margin of -0.06 against an
+     actual +2.23.
+  3. **Arithmetic blending ignored the league baseline.** Replaced with log5
+     (odds-ratio), which is what makes it genuinely relational.
+  4. **Defensive points went to nobody.** `opp_touchdown` and `safety` scored 0
+     for both sides. build_drive_stats fixed this for its own columns and the
+     simulator never picked it up.
+  5. **Possessions treated as independent** when football alternates them.
+
+**The sequencing lesson is the valuable part.** Fixing defects 1-4 alone made
+RMSE WORSE, 9.608 -> 9.756, because they widened a distribution still centred in
+the wrong place. v1's predictions had sd 2.60 against an actual 10.04 -- so
+compressed that its missing home-field term barely showed up in the error.
+Correcting structure without correcting the centre turns four genuine
+improvements into a worse number.
+
+The log5 blend also needed shrinking toward the baseline (it AMPLIFIES
+deviations, and the inputs are ~11 noisy possessions a game) -- the same
+correction that rescued the pass/rush split. The weight is chosen INSIDE each
+training fold: the test-set optimum is 0.6 for 9.469, in-fold selection gives
+9.478, and taking the 0.6 would be the alpha=100 error this project already
+refused once.
+
+Betting is unchanged: ATS 49.4%, identical to v1, still unprofitable. Better
+scores did not become better bets.
+
+### What NOT to re-try
+
+- Any single-exponential half-life other than 17 (swept twice now, unimodal).
+- Per-stat half-lives, and more importantly do not motivate anything from
+  split-half r -- use autocorrelation by lag.
+- Steeper recency in any form. The within-season autocorrelation is flat; there
+  is no decay to capture.
+- Matchup products on Poisson specifically. Its log link already multiplies.
+- Adding any of these to Poisson at all. Every arm made it worse on both RMSE
+  and calibration.
+
+### The one genuinely open thread
+
+`drive_model_v2` at 9.478 with slope 1.013 is not a production candidate on its
+own -- Poisson is better on both. But it is the only model in the project built
+on a DIFFERENT mechanism (drive outcomes rather than per-play EPA) that is now
+competitive, and the A5 finding blamed the stack's failure on its base models
+being near-duplicates of each other. A stack of Poisson + drive_model_v2 pairs
+two genuinely decorrelated predictors for the first time. Untested.
+
 ## Real, Unresolved Gaps (Worth Pursuing With New Data or New Direction, Not New Cuts of Old Data)
 
 - **No injury/inactive/depth-chart data source.** This is the single most-cited real gap across every session — the model has no visibility into who is actually playing, which is the dominant driver of the QB-identity and finale-week findings above. Solving this requires a new data source, not new feature engineering on existing play-by-play.
