@@ -796,6 +796,69 @@ refused once.
 Betting is unchanged: ATS 49.4%, identical to v1, still unprofitable. Better
 scores did not become better bets.
 
+### Follow-up (same day): four more drive-model ideas, one survived
+
+Each was screened by MEASURING the thing that would have to be true, before
+building. Three failed that screen and were not built. Recording the screens,
+because they are reusable and two of them corrected claims I had made out loud.
+
+**SURVIVED -- three context corrections the drive model was missing.**
+9.478 -> 9.4635, and against baseline it moves from +0.0191 to **+0.0047, CI
+[-0.0329, +0.0411]**. Away bias **+1.098 -> +0.094**, calibration slope 0.986.
+All three were already settled elsewhere in the project and this model simply
+never picked them up:
+
+  - `recent_residual_offset`, the scoring-drift correction every other
+    production model applies. The project had already measured it taking the
+    others from +0.78 to +0.06; it did the same here.
+  - C3 neutral sites: a Super Bowl has no home team, and v2 was both averaging
+    those games into the home-field estimate and then applying the estimate to
+    them.
+  - C5 overtime: halved when fitting the home edge, as elsewhere.
+
+`drive_model_table` carries none of the context columns needed for the last two,
+so `load_table()` joins them from schedules rather than changing production.
+
+**REJECTED ON MEASUREMENT -- field position.** I had called this "the biggest
+unused lever" and that was wrong. `drive_start_yard_line` is 98.7% populated and
+completely unused, and the EP curve is genuinely steep -- 4.70 points per drive
+starting inside the opponent 20 against 1.46 from inside your own 14, a 3.23
+spread. But:
+
+    teams differ by only sd 2.07 yards in mean starting field position
+    persistence (split-half): own 0.194, opponent-allowed 0.288
+
+At ~0.046 EP per yard that is ~1.0 point of raw game-level variation, of which
+roughly a fifth is predictable. **~0.2 points of real signal.** Exactly the same
+trap as the per-stat half-life idea: a large effect whose BETWEEN-TEAM,
+PERSISTENT component is tiny. A steep curve is not the same as a usable feature.
+
+(Note for anyone re-measuring this: take the first SCRIMMAGE play of a drive.
+Using the first play of any kind pulls in kickoffs at the 35 and piles half the
+drives into one bucket, which produces a plausible and entirely wrong curve.)
+
+**REJECTED ON MEASUREMENT -- the possession model.** I had claimed the channel
+was dead because predicted drive counts have sd 0.59 against an actual 1.65.
+That comparison was wrong: the actual figure includes within-game noise. The
+PREDICTABLE spread is the team-season one, sd 0.66 drives (persistence 0.372),
+so a predicted sd of 0.59 is about right. The channel is not dead; it is
+correctly sized.
+
+**REJECTED ON METHOD -- blending with Poisson.** A fixed-weight probe showed
+9.3679 -> 9.3555 at 80/20, holding across 20-40% drive weight. That was
+test-set optimism. Selecting the weight INSIDE each training fold gives
+**-0.0007, CI [-0.0222, +0.0211], P(better) 53%** -- a dead tie -- and a ridge
+meta-model is +0.0068. The reason is visible in the chosen weights: the selector
+spreads them from 0.0 to 0.6 across folds rather than converging, so the optimum
+is not stable enough to be learned. Error correlation with Poisson is 0.980,
+the lowest pairing in the project but still very high.
+
+**The reusable lesson across all four.** The screen that decided each one was
+persistence, not effect size. An effect can be large per unit and worthless as a
+feature if teams do not differ on it, or if the differences do not repeat. Ask
+"how much do teams differ, and does that difference persist" BEFORE building,
+and most ideas answer themselves in ten minutes.
+
 ### What NOT to re-try
 
 - Any single-exponential half-life other than 17 (swept twice now, unimodal).

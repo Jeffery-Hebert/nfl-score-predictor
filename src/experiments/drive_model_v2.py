@@ -86,7 +86,11 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from src.models.common import recent_residual_offset
+
 DRIVE_TABLE = "data/processed/drive_model_table.parquet"
+TEAM_GAME_STATS = "data/processed/team_game_stats.parquet"
+SCHEDULES = "data/raw/schedules.parquet"
 
 CATS = [
     "touchdown",
@@ -220,10 +224,55 @@ def _select_shrink(train: pd.DataFrame, base: dict) -> float:
     return best_w
 
 
+def load_table() -> pd.DataFrame:
+    """drive_model_table plus the three context columns it lacks.
+
+    build_drive_game_features (production) never carried is_neutral_site,
+    went_to_ot or gameday-as-datetime, so the drive model had no way to know a
+    Super Bowl from a home game or an overtime result from a regulation one.
+    Both are corrections C3 and C5 that the rest of the project made in
+    2026-09-14 and this table missed. Joined here rather than in production,
+    which is untouched.
+    """
+    df = pd.read_parquet(DRIVE_TABLE)
+    df["gameday"] = pd.to_datetime(df["gameday"])
+
+    sched = pd.read_parquet(SCHEDULES)[["game_id", "location", "game_type", "overtime"]]
+    sched["is_neutral_site"] = (sched["location"] == "Neutral").astype(int)
+    sched["went_to_ot"] = sched["overtime"].fillna(0).astype(int)
+    return df.merge(
+        sched[["game_id", "is_neutral_site", "went_to_ot"]], on="game_id", how="left"
+    )
+
+
+def _home_field(train: pd.DataFrame) -> float:
+    """The home edge, estimated the way baseline.py estimates it.
+
+    Two corrections the drive model was missing, both already settled elsewhere
+    in this project:
+
+      C3  neutral-site games (London, Mexico, Munich, Super Bowl) have no home
+          team. Including them drags the estimate toward zero AND the estimate
+          then gets applied to them. Excluded here, and predict() gives them no
+          adjustment.
+      C5  overtime inflates the final margin in a way no pregame quantity
+          predicts, so those rows are halved rather than dropped.
+    """
+    rows = train
+    if "is_neutral_site" in train.columns:
+        non_neutral = train[train["is_neutral_site"] == 0]
+        if not non_neutral.empty:
+            rows = non_neutral
+    margin = (rows["home_score"] - rows["away_score"]).to_numpy(float)
+    if "went_to_ot" in rows.columns:
+        w = np.where(rows["went_to_ot"].to_numpy() == 1, 0.5, 1.0)
+        return float(np.average(margin, weights=w))
+    return float(np.nanmean(margin))
+
+
 def fit_drive_model(train: pd.DataFrame) -> dict:
-    """Baselines, cold-start fallbacks, the home-field offset and the blend
-    weight -- all from the training fold only."""
-    margin = (train["home_score"] - train["away_score"]).to_numpy(float)
+    """Baselines, cold-start fallbacks, the home-field offset, the blend weight
+    and the drift correction -- all from the training fold only."""
     base = {
         "league_off": _league_rates(train, "off"),
         "league_def": _league_rates(train, "def"),
@@ -234,14 +283,23 @@ def fit_drive_model(train: pd.DataFrame) -> dict:
         # without this the model cannot express a home edge at all. Split evenly
         # across the two sides so the predicted TOTAL is unaffected and only the
         # margin moves.
-        "home_field": float(np.nanmean(margin)),
+        "home_field": _home_field(train),
         "shrink": None,  # filled below, needs the rest of the dict to score
+        "off_h": 0.0,
+        "off_a": 0.0,
     }
     return _finish_fit(train, base)
 
 
 def _finish_fit(train: pd.DataFrame, base: dict) -> dict:
     base["shrink"] = _select_shrink(train, base)
+    # Scoring-environment drift, the same correction every other production
+    # model applies and this one never did. Measured at an uncorrected +1.10
+    # away bias -- the project already validated this mechanism taking the other
+    # models from +0.78 to +0.06. Computed AFTER shrink, because it has to
+    # measure the residuals of the model as finally configured.
+    h, a = predict_drive_model(base, train)
+    base["off_h"], base["off_a"] = recent_residual_offset(train, h, a)
     return base
 
 
@@ -306,9 +364,15 @@ def predict_drive_model(model: dict, test: pd.DataFrame):
     home = h_off + a_conceded
     away = a_off + h_conceded
 
-    # ...and then the home edge, which nothing above can produce.
+    # ...and then the home edge, which nothing above can produce. C3: a
+    # neutral-site game has no home team and gets no adjustment.
     adj = model.get("home_field", 0.0) / 2.0
-    return home + adj, away - adj
+    if "is_neutral_site" in test.columns:
+        adj = adj * (1 - test["is_neutral_site"].to_numpy(float))
+    return (
+        home + adj - model.get("off_h", 0.0),
+        away - adj - model.get("off_a", 0.0),
+    )
 
 
 def simulate_distribution(
@@ -353,8 +417,7 @@ def simulate_distribution(
 def main():
     from src.validate.walk_forward import score_predictions, walk_forward_evaluate
 
-    df = pd.read_parquet(DRIVE_TABLE)
-    df["gameday"] = pd.to_datetime(df["gameday"])
+    df = load_table()
     res = walk_forward_evaluate(
         df, fit_drive_model, predict_drive_model, min_train_seasons=2
     )

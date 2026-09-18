@@ -251,3 +251,112 @@ class TestSharedPossessions:
         g8.loc[0, "away_pregame_n_drives_faced"] = 8.0
         h8, _ = dm.predict_drive_model(model(), g8)
         assert h[0] > h8[0], "the opponent's drives-faced was ignored"
+
+
+class TestContextCorrections:
+    """Three corrections the drive model was missing that every other model in
+    the project already had. All measured, none speculative:
+
+      drift        an uncorrected +1.098 away bias. recent_residual_offset is
+                   the project's validated fix and took the other models from
+                   +0.78 to +0.06.
+      neutral site C3. A Super Bowl has no home team; v2 was handing it a home
+                   edge anyway, and including those games dragged the estimate.
+      overtime     C5. An extra period inflates the margin in a way no pregame
+                   quantity predicts, so those rows are halved when fitting.
+    """
+
+    @staticmethod
+    def _train(n=300, margin=3.0, neutral_margin=0.0, ot_margin=0.0, seed=0):
+        rng = np.random.default_rng(seed)
+        neutral = rates(touchdown=0.23, field_goal=0.15)
+        rows = []
+        for i in range(n):
+            g = game(neutral, neutral, neutral, neutral).iloc[0].to_dict()
+            g["gameday"] = pd.Timestamp("2022-09-01") + pd.Timedelta(days=7 * i)
+            g["is_neutral_site"] = 1 if i % 10 == 0 else 0
+            g["went_to_ot"] = 1 if i % 7 == 0 else 0
+            m = margin
+            if g["is_neutral_site"]:
+                m = neutral_margin
+            if g["went_to_ot"]:
+                m = ot_margin
+            g["away_score"] = 21.0
+            g["home_score"] = 21.0 + m
+            rows.append(g)
+        return pd.DataFrame(rows)
+
+    def test_neutral_site_games_are_excluded_from_the_home_estimate(self):
+        """Neutral games with a zero margin must not drag the estimate down.
+
+        ot_margin is set equal to margin so this isolates the neutral-site
+        correction; the overtime weighting is exercised separately below.
+        """
+        with_neutral = dm._home_field(
+            self._train(margin=4.0, neutral_margin=0.0, ot_margin=4.0)
+        )
+        assert with_neutral == pytest.approx(4.0, abs=0.2), (
+            f"home edge came out {with_neutral:.2f}, not ~4.0 -- neutral-site "
+            "games are being averaged in"
+        )
+
+    def test_including_neutral_games_would_visibly_drag_the_estimate(self):
+        """Shows the correction is load-bearing rather than cosmetic: the naive
+        mean over every game lands well below the true home-game margin."""
+        t = self._train(margin=4.0, neutral_margin=0.0, ot_margin=4.0)
+        naive = float((t["home_score"] - t["away_score"]).mean())
+        corrected = dm._home_field(t)
+        assert (
+            corrected - naive > 0.25
+        ), f"excluding neutral sites moved the estimate only {corrected - naive:.3f}"
+
+    def test_neutral_site_games_receive_no_home_adjustment(self):
+        neutral = rates(touchdown=0.23, field_goal=0.15)
+        g = game(neutral, neutral, neutral, neutral)
+        g["is_neutral_site"] = 1
+        h, a = dm.predict_drive_model(model(home_field=3.0), g)
+        assert h[0] == pytest.approx(
+            a[0]
+        ), "a neutral-site game was given a home-field edge"
+
+    def test_a_normal_game_still_receives_it(self):
+        neutral = rates(touchdown=0.23, field_goal=0.15)
+        g = game(neutral, neutral, neutral, neutral)
+        g["is_neutral_site"] = 0
+        h, a = dm.predict_drive_model(model(home_field=3.0), g)
+        assert h[0] - a[0] == pytest.approx(3.0)
+
+    def test_overtime_games_are_down_weighted_not_dropped(self):
+        """Halved, so they still inform the estimate but do not dominate it."""
+        inflated = dm._home_field(self._train(margin=3.0, ot_margin=30.0))
+        flat = dm._home_field(self._train(margin=3.0, ot_margin=3.0))
+        assert inflated > flat, "OT games are being dropped entirely, not weighted"
+        # ~1 game in 7 is OT here; at full weight a 30-point margin would drag
+        # the mean to ~7, at half weight to ~5.
+        assert inflated < 7.0, "OT games carried full weight"
+
+    def test_the_drift_offset_is_applied_to_predictions(self):
+        neutral = rates(touchdown=0.23, field_goal=0.15)
+        g = game(neutral, neutral, neutral, neutral)
+        plain = model()
+        shifted = dict(plain, off_h=1.5, off_a=-2.0)
+        h0, a0 = dm.predict_drive_model(plain, g)
+        h1, a1 = dm.predict_drive_model(shifted, g)
+        assert h1[0] == pytest.approx(h0[0] - 1.5)
+        assert a1[0] == pytest.approx(a0[0] + 2.0)
+
+    def test_fit_produces_an_offset_from_its_own_residuals(self):
+        """It must be measured AFTER shrink is chosen -- the offset describes the
+        model as finally configured, not an intermediate one."""
+        m = dm.fit_drive_model(self._train())
+        assert "off_h" in m and "off_a" in m
+        assert np.isfinite(m["off_h"]) and np.isfinite(m["off_a"])
+
+    def test_a_table_without_the_context_columns_still_works(self):
+        """drive_model_table (production) carries neither column. The model must
+        degrade rather than crash when handed one."""
+        train = self._train().drop(columns=["is_neutral_site", "went_to_ot"])
+        m = dm.fit_drive_model(train)
+        assert np.isfinite(m["home_field"])
+        h, a = dm.predict_drive_model(m, train.head(3))
+        assert np.isfinite(h).all() and np.isfinite(a).all()
