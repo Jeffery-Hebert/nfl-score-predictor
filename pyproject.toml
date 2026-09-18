@@ -1,5 +1,5 @@
 [tool.pytest.ini_options]
 pythonpath = ["."]
 markers = [
-    "requires_data: test reads built parquet files under data/ (which is gitignored). Excluded in CI via `-m 'not requires_data'`; run locally after building the pipeline.",
+    "requires_data: test reads files under data/ (which is gitignored). Excluded in CI via `-m 'not requires_data'`; run locally after building the pipeline. A test that touches data/ WITHOUT this marker passes locally and fails only in CI -- that went unnoticed for four commits once. Before pushing, verify the CI scope actually runs without data/: `mv data /tmp/d && pytest tests/ -m 'not requires_data' -q; mv /tmp/d data`. Note it applies to data/raw/ too, not just built parquet: code paths like predict_week.kickoff_utc() read schedules.parquet, so a test exercising them must supply its own file via monkeypatch rather than relying on the real one.",
 ]

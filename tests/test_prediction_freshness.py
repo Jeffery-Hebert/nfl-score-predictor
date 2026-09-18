@@ -343,20 +343,42 @@ class TestFreezeStartedGames:
         )
         assert got.equals(fresh)
 
-    def test_a_file_written_before_kickoff_existed_is_not_discarded(self, tmp_path):
-        """Older records carry no kickoff column. They must be recovered from
-        the schedule, not silently dropped."""
+    def test_a_file_written_before_kickoff_existed_is_recovered(
+        self, tmp_path, monkeypatch
+    ):
+        """Older records carry no kickoff column. It must be recovered from the
+        schedule so the row is still frozen, not silently treated as pending and
+        overwritten.
+
+        The schedule is supplied by the test rather than read from data/raw/,
+        which is gitignored and absent in CI.
+        """
+        sched = tmp_path / "schedules.parquet"
+        pd.DataFrame(
+            [
+                {
+                    "game_id": "THU",
+                    "gameday": "2026-09-17",
+                    "gametime": "19:15",  # ET -> 2026-09-17T23:15Z
+                }
+            ]
+        ).to_parquet(sched, index=False)
+        monkeypatch.setattr(predict_week, "SCHEDULES", sched)
+
         path = tmp_path / "2026_wk02.parquet"
         row = self._row("THU", "2026-09-17T23:15:00", home=24.0)
         del row["kickoff"]
         pd.DataFrame([row]).to_parquet(path, index=False)
+
         fresh = pd.DataFrame([self._row("THU", "2026-09-17T23:15:00", home=31.0)])
-        # No schedules lookup can resolve a fake game_id, so kickoff stays NaT
-        # and the row is treated as not-yet-started rather than lost.
         got = predict_week.freeze_started_games(
             fresh, path, pd.Timestamp("2026-09-20T11:00:00", tz="UTC")
         )
         assert set(got["game_id"]) == {"THU"}, "the legacy row vanished"
+        assert got.iloc[0]["combined_home"] == 24.0, (
+            "a legacy row's kickoff was not recovered, so a played game was "
+            "re-forecast and its original record lost"
+        )
 
 
 class TestTrainingCutoffFollowsPendingGames:
