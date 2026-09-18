@@ -125,6 +125,10 @@ td.final{font-weight:600}
 .err.hit{color:var(--hit)}
 .err.miss{color:var(--miss)}
 .dash{color:var(--ink-faint)}
+.late{display:inline-block;margin-left:7px;padding:0 5px;border-radius:2px;
+  background:var(--accent-soft);color:var(--ink-soft);font-size:9.5px;font-weight:600;
+  letter-spacing:.07em;text-transform:uppercase;vertical-align:1px;
+  font-family:"IBM Plex Sans",sans-serif}
 
 /* phone layout -- the graded table is seven columns wide and sideways
    scrolling to read a score is miserable, so narrow screens get one card
@@ -323,18 +327,28 @@ function drawLede(w){
 function drawFlag(w){
   const el = document.getElementById("flag");
   el.replaceChildren();
-  if (!w.backfilled) return;
+  const n = w.n_backfilled || 0;
+  if (!n) return;
+  const total = w.games.length;
+  const all = n === total;
   const d = document.createElement("div");
   d.className = "flag";
   const b = document.createElement("b");
-  b.textContent = "Backfilled week. ";
+  // A week is written once per slate -- Thursday, Sunday, Monday -- so it is
+  // normal for part of a week to be pre-registered and part not. Saying which
+  // games beats condemning the whole slate.
+  b.textContent = all ? "Backfilled week. " : `${n} of ${total} games backfilled. `;
   d.append(b, document.createTextNode(
-    `These predictions were generated on ${w.generated_at.slice(0,10)}, after the games were ` +
-    `played. The fit still only saw games through ${w.trained_through}, so no result from this ` +
-    `week reached it — but two softer advantages remain that a week predicted ahead of kickoff ` +
-    `does not have. Nothing stopped these from being regenerated until they looked good, and the ` +
-    `model's settings (how fast old games decay, how hard the fit is regularised) were chosen ` +
-    `on a dataset that already contained this week. Weigh them accordingly.`));
+    (all
+      ? `These predictions were written after the games were played. `
+      : `Those ${n} were written after kickoff; the other ${total - n} were pre-registered ` +
+        `and are marked below. `) +
+    `The fit still only ever saw games that had already finished, so no result from a game ` +
+    `reached its own forecast — but two softer advantages remain that a prediction made ahead ` +
+    `of kickoff does not have. Nothing stopped a late one from being regenerated until it ` +
+    `looked good, and the model's settings (how fast old games decay, how hard the fit is ` +
+    `regularised) were chosen on a dataset that already contained these games. ` +
+    `Weigh them accordingly.`));
   el.append(d);
 }
 
@@ -397,6 +411,7 @@ function drawBody(w){
     m.append(document.createTextNode(`${g.away} @ ${g.home}`));
     const dt = document.createElement("span");
     dt.className = "dt"; dt.textContent = kickLabel(g);
+    if (g.backfilled) dt.append(lateTag());
     m.append(dt);
     tr.append(m);
 
@@ -427,7 +442,9 @@ function careerLines(){
     const s = w.summary.combined;
     if (!s) return;
     n += s.n; won += s.winners; pts += s.mae * s.n * 2;
-    if (w.backfilled) back += s.n;
+    // Count backfilled GAMES, not whole weeks. A week with one late Thursday
+    // forecast used to discount all sixteen of its results.
+    back += (w.n_backfilled_graded || 0);
   });
   const lines = [
     `${DATA.weeks.length} week${DATA.weeks.length > 1 ? "s" : ""} on file · ` +
@@ -447,6 +464,17 @@ function careerLines(){
   });
 }
 
+// Marks a single game whose forecast was written after its own kickoff. Only
+// meaningful now that a week is predicted in three passes and can be part
+// pre-registered, part not.
+function lateTag(){
+  const t = document.createElement("span");
+  t.className = "late";
+  t.textContent = "predicted late";
+  t.title = "This forecast was written after this game had already kicked off";
+  return t;
+}
+
 function gradeSpan(gr){
   const s = document.createElement("span");
   s.className = "err " + (gr.winner_correct ? "hit" : "miss");
@@ -462,6 +490,7 @@ function drawCards(w){
     h.textContent = `${g.away} @ ${g.home}`;
     const when = document.createElement("div");
     when.className = "when"; when.textContent = kickLabel(g);
+    if (g.backfilled) when.append(lateTag());
     c.append(h, when);
 
     if (g.actual){

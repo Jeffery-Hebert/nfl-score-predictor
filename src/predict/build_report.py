@@ -187,6 +187,21 @@ def week_payload(path: Path, actuals: pd.DataFrame, kickoffs: pd.Series) -> dict
                 else None
             ),
         }
+        # Honesty flag, per GAME. A forecast written before its own kickoff is a
+        # genuine pre-registered prediction; one written afterwards is still out
+        # of sample (the fit only ever sees prior games) but nobody stopped it
+        # being regenerated until it looked good.
+        #
+        # This used to be decided for the whole week off the week's FIRST
+        # kickoff, which condemned fifteen untouched Sunday forecasts because a
+        # Thursday game had already been played. Now that each row carries its
+        # own generated_at and kickoff -- a week is written three times as its
+        # slates come up -- the question can be asked of each game separately,
+        # which is the grain it was always about.
+        made = pd.to_datetime(r.get("generated_at"), utc=True, errors="coerce")
+        g["backfilled"] = bool(
+            pd.notna(made) and pd.notna(r["_kick"]) and made > r["_kick"]
+        )
         if pd.notna(r.get("act_home")):
             g["actual"] = {"away": float(r["act_away"]), "home": float(r["act_home"])}
             g["grade"] = grade(models, g["actual"])
@@ -207,22 +222,20 @@ def week_payload(path: Path, actuals: pd.DataFrame, kickoffs: pd.Series) -> dict
                 "winners": sum(r["winner_correct"] for r in rows),
                 "n": len(rows),
             }
-    # Honesty flag. A week predicted BEFORE its first kickoff is a genuine
-    # pre-registered forecast; one generated afterwards is still out of sample
-    # (the fit only ever sees prior games) but nobody stopped it from being
-    # regenerated until it looked good. The page says which it is rather than
-    # presenting the two as equivalent.
-    generated = pd.Timestamp(df["generated_at"].iloc[0])
-    first_kick = pd.Timestamp(df["gameday"].min())
-    if generated.tzinfo is not None:
-        first_kick = first_kick.tz_localize(generated.tzinfo)
+    n_backfilled = sum(g["backfilled"] for g in games)
     return {
         "season": int(df["season"].iloc[0]),
         "week": int(df["week"].iloc[0]),
-        "trained_through": str(df["trained_through"].iloc[0]),
-        "n_training_games": int(df["n_training_games"].iloc[0]),
-        "generated_at": str(df["generated_at"].iloc[0]),
-        "backfilled": bool(generated > first_kick),
+        "trained_through": str(df["trained_through"].max()),
+        "n_training_games": int(df["n_training_games"].max()),
+        # The newest forecast in the week. Individual games carry their own.
+        "generated_at": str(df["generated_at"].max()),
+        "n_backfilled": int(n_backfilled),
+        # Graded AND backfilled -- what the running record has to discount.
+        "n_backfilled_graded": int(
+            sum(g["backfilled"] and "grade" in g for g in games)
+        ),
+        "backfilled": bool(n_backfilled),
         "n_graded": graded,
         "summary": summary,
         "games": games,

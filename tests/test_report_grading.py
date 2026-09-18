@@ -101,6 +101,9 @@ def fake_week(tmp_path, generated_at, scores=True):
                 "season": 2025,
                 "week": 1,
                 "gameday": pd.Timestamp("2025-09-07"),
+                # The backfill flag is now per game and compares generated_at to
+                # THIS game's kickoff, so the fixture has to carry one.
+                "kickoff": pd.Timestamp("2025-09-07T17:00:00", tz="UTC"),
                 "home_team": h,
                 "away_team": a,
                 "combined_home": 27.0,
@@ -256,3 +259,120 @@ class TestSlateOrdering:
         w = week_payload(path, pd.DataFrame(columns=["game_id"]), NO_KICKOFFS)
         assert len(w["games"]) == len(self.ROWS)
         assert len({g["away"] for g in w["games"]}) == len(self.ROWS)
+
+
+class TestPerGameBackfillFlag:
+    """Whether a forecast was pre-registered is a per-GAME question.
+
+    It used to be decided for the whole week off the week's first kickoff, so a
+    Thursday night game that had already been played condemned the fifteen
+    untouched Sunday forecasts alongside it. That matters now that a week is
+    written in three passes -- Thursday, Sunday, Monday -- and is routinely part
+    pre-registered and part not.
+    """
+
+    @staticmethod
+    def _week(tmp_path, rows):
+        """rows: (game_id, kickoff, generated_at)."""
+        recs = [
+            {
+                "game_id": gid,
+                "season": 2026,
+                "week": 2,
+                "gameday": pd.Timestamp(kick).tz_localize(None).normalize(),
+                "kickoff": pd.Timestamp(kick, tz="UTC"),
+                "home_team": f"H{i:02d}",
+                "away_team": f"A{i:02d}",
+                "combined_home": 24.0,
+                "combined_away": 20.0,
+                "generated_at": gen,
+                "trained_through": "2026-09-14",
+                "n_training_games": 1976,
+            }
+            for i, (gid, kick, gen) in enumerate(rows)
+        ]
+        path = tmp_path / "2026_wk02.parquet"
+        pd.DataFrame(recs).to_parquet(path, index=False)
+        return path
+
+    def test_a_forecast_written_before_its_own_kickoff_is_not_flagged(self, tmp_path):
+        path = self._week(
+            tmp_path,
+            [("THU", "2026-09-18T00:15:00", "2026-09-17T18:00:00+00:00")],
+        )
+        w = week_payload(path, pd.DataFrame(columns=["game_id"]), NO_KICKOFFS)
+        assert w["games"][0]["backfilled"] is False
+        assert w["n_backfilled"] == 0
+
+    def test_a_forecast_written_after_its_own_kickoff_is_flagged(self, tmp_path):
+        path = self._week(
+            tmp_path,
+            [("THU", "2026-09-18T00:15:00", "2026-09-19T12:00:00+00:00")],
+        )
+        w = week_payload(path, pd.DataFrame(columns=["game_id"]), NO_KICKOFFS)
+        assert w["games"][0]["backfilled"] is True
+        assert w["n_backfilled"] == 1
+
+    def test_a_played_thursday_game_does_not_condemn_the_sunday_slate(self, tmp_path):
+        """THE regression this replaces. Under the old week-level rule all three
+        of these counted as backfilled because the Thursday game had kicked off
+        before the Sunday forecasts were written."""
+        path = self._week(
+            tmp_path,
+            [
+                # written late, after its own kickoff -- genuinely backfilled
+                ("THU", "2026-09-18T00:15:00", "2026-09-20T11:00:00+00:00"),
+                # written Sunday morning, hours before their own kickoffs
+                ("SUN1", "2026-09-20T17:00:00", "2026-09-20T11:00:00+00:00"),
+                ("SUN2", "2026-09-20T20:25:00", "2026-09-20T11:00:00+00:00"),
+            ],
+        )
+        w = week_payload(path, pd.DataFrame(columns=["game_id"]), NO_KICKOFFS)
+        flags = {g["away"]: g["backfilled"] for g in w["games"]}
+        assert sum(flags.values()) == 1, (
+            f"expected exactly the Thursday game flagged, got {flags} -- the "
+            "week-level rule is back"
+        )
+        assert w["n_backfilled"] == 1
+        assert w["backfilled"] is True, "the week still carries a partial flag"
+
+    def test_the_running_record_counts_backfilled_games_not_weeks(self, tmp_path):
+        """n_backfilled_graded is what the page discounts. Only graded games
+        can be in a record, so an ungraded late forecast must not inflate it."""
+        path = self._week(
+            tmp_path,
+            [
+                ("PLAYED", "2026-09-18T00:15:00", "2026-09-20T11:00:00+00:00"),
+                ("UNPLAYED", "2026-09-22T00:15:00", "2026-09-23T11:00:00+00:00"),
+            ],
+        )
+        actuals = pd.DataFrame(
+            [{"game_id": "PLAYED", "home_score": 24.0, "away_score": 20.0}]
+        )
+        w = week_payload(path, actuals, NO_KICKOFFS)
+        assert w["n_backfilled"] == 2, "both forecasts postdate their kickoffs"
+        assert w["n_backfilled_graded"] == 1, "only one of them has a result"
+
+    def test_a_missing_kickoff_is_not_assumed_backfilled(self, tmp_path):
+        """Absence of evidence is not evidence of lateness -- a week with no
+        resolvable kickoff must not be smeared as backfilled."""
+        recs = [
+            {
+                "game_id": "X",
+                "season": 2026,
+                "week": 2,
+                "gameday": pd.Timestamp("2026-09-20"),
+                "home_team": "AAA",
+                "away_team": "BBB",
+                "combined_home": 24.0,
+                "combined_away": 20.0,
+                "generated_at": "2026-09-25T12:00:00+00:00",
+                "trained_through": "2026-09-14",
+                "n_training_games": 1976,
+            }
+        ]
+        path = tmp_path / "2026_wk02.parquet"
+        pd.DataFrame(recs).to_parquet(path, index=False)
+        w = week_payload(path, pd.DataFrame(columns=["game_id"]), NO_KICKOFFS)
+        assert w["games"][0]["backfilled"] is False
+        assert w["n_backfilled"] == 0

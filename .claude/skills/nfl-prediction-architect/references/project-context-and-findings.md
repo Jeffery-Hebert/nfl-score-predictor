@@ -573,11 +573,35 @@ that week's report entirely, and nothing in the suite reported it until
 `TestUpcomingWeekIsPredictable` was written. `assert_training_is_current` cannot
 see this: it validates SCORES, never feature inputs.
 
-**Consequence for operations.** `config.yaml` documents a Wednesday retrain
-cadence and the README's weekly loop says Tuesday. Both are wrong for injuries,
-and neither is read by code. A routine now runs the refresh on **Sunday 06:00
-America/Chicago** (`trig_01WhT9vopskUP7qWehv3jmuX`, cron `0 11 * * 0`), which is
-after the Friday report settles and before the 1pm ET kickoffs.
+**Consequence for operations.** Four cloud routines now run the whole cadence,
+and the split between them matters:
+
+| routine | cron (UTC) | local | what it does |
+|---|---|---|---|
+| full retrain + benchmark | `0 11 * * 3` | Wed 06:00 CT | walk-forward backtest, scoreboard, full test suite. ~1 hour, GP is 30 min of it. Validates; forecasts nothing. |
+| prediction, TNF | `0 18 * * 4` | Thu 13:00 CT | pull, rebuild, predict Thursday's game |
+| prediction, main slate | `0 11 * * 0` | Sun 06:00 CT | pull, rebuild, predict Sunday |
+| prediction, MNF | `0 18 * * 1` | Mon 13:00 CT | pull, rebuild, predict Monday night |
+
+Ids: `trig_01WCWe1gGxdj3HcNkgCeYs93` (Wed), `trig_014S6uMD3zyXm38YoAtqYSBk` (Thu),
+`trig_01WhT9vopskUP7qWehv3jmuX` (Sun), `trig_01GabWqUtpb92XaR3irsoHsP` (Mon).
+
+The distinction worth holding onto: **there is no saved model artifact.**
+`predict_week` fits from scratch on every run, so each prediction slot is
+already a retrain -- it just takes 40 seconds because it fits once rather than
+111 times. What Wednesday adds is not a fresher model but VALIDATION: the
+walk-forward backtest, the bootstrap against baseline, and the full test suite.
+That is the thing that silently went stale, and the thing a bad forecast would
+otherwise take weeks to reveal.
+
+Each prediction slot trains on everything available at the moment it runs (the
+cutoff is the first PENDING kickoff, not the week's first game), so the Monday
+run does see the weekend's results. No intra-week retrain is configured beyond
+that because none is needed.
+
+`config.yaml` still documents a Wednesday retrain and the README's weekly loop
+still says Tuesday; neither is read by code, and the Wednesday line is now
+accidentally correct for the benchmark job.
 
 **Two caveats on that schedule, neither fixed:**
 

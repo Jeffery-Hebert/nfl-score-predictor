@@ -315,8 +315,8 @@ are computed fresh at render time from the final scores. That is the whole
 point of keeping the parquet files in git: they are a dated record of what the
 model claimed *beforehand*, which is the only kind of forecast worth counting.
 
-Weeks that were predicted after the games were played are labelled **backfilled**
-on the page. The fit still never sees a game that hasn't kicked off, so no result
+Individual games predicted after they kicked off are labelled **predicted late**
+on the page, and a week says how many of its games that applies to. The fit still never sees a game that hasn't kicked off, so no result
 from that week reaches the model — but two softer advantages remain that a real
 pre-kickoff forecast doesn't have:
 
@@ -324,10 +324,17 @@ pre-kickoff forecast doesn't have:
 2. the model's settings (the recency half-life, the ridge penalty) were chosen on
    a dataset that already contained those weeks.
 
-Neither is leakage in the strict sense, and both are enough to make a backfilled
-record flatter than a live one. The 2025 season on this page is backfilled. The
-weeks predicted from 2026 Week 2 onward are not, and those are the ones to judge
-the model by.
+Neither is leakage in the strict sense, and both are enough to make a late
+forecast flatter than a live one.
+
+The label is per **game**, not per week, because a week is now predicted three
+times as its slates come up — Thursday afternoon for Thursday night, Sunday
+morning for the Sunday games, Monday afternoon for Monday night. Each game is
+forecast about six hours before its own kickoff, on the freshest injury report
+available, and is then frozen: a later run in the same week carries it over
+untouched rather than rewriting it. So a week is routinely part pre-registered
+and part not, and saying which games were late beats condemning the whole
+slate.
 
 Rebuild the page any time new results land, without re-predicting anything:
 

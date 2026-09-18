@@ -12,6 +12,12 @@
 #
 # torch is deliberately not installed here -- no test imports it, and the
 # CPU-wheel index URL breaks the install (see the note in requirements.txt).
+#
+# This is the only workflow in the repo. A weekly-smoke-test workflow used to sit
+# beside it, firing a Wednesday cron whose single step was `import nflreadpy`.
+# The scheduled routines now pull that library's data three times a week and
+# would fail far louder than an import check, so it was removed rather than
+# maintained as a second thing to keep green.
 
 name: tests
 
@@ -24,9 +30,9 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: pip
