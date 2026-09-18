@@ -897,6 +897,76 @@ feature if teams do not differ on it, or if the differences do not repeat. Ask
 "how much do teams differ, and does that difference persist" BEFORE building,
 and most ideas answer themselves in ten minutes.
 
+### The drive model as a MARKOV CHAIN (2026-09-18) -- operator's architecture
+
+The operator made an architectural point I had missed entirely, and it is
+correct: **in a drive model, field position is ENDOGENOUS, not a forecast
+input.** Drive N's outcome determines drive N+1's starting position. Touchdown
+-> kickoff -> ~own 27. Punt -> ~own 24. Turnover -> opponent takes over at
+~own 48. There is no need to predict field position as a team trait at all --
+which is exactly why my attempt to do so failed at r=0.108. I was forecasting
+the wrong object.
+
+`src/experiments/drive_chain.py` is the rebuild. Measured transition map, 43k
+drives -- outcome of drive N against where the opponent starts drive N+1:
+
+    Punt                 own 24.2   (sd 14.3)
+    Touchdown            own 27.2   (sd  7.9)
+    Field goal           own 26.9   (sd  7.2)
+    Turnover             own 47.8   (sd 25.1)   <- 23 yards better than a punt
+    Turnover on downs    own 37.8   (sd 21.8)
+    Missed field goal    own 36.6   (sd  8.5)
+
+Outcome type explains R^2 = 0.347 of the next starting position.
+
+**This exposed a real error in drive_model_v2.** A turnover scores ZERO POINTS
+and the model stops there. It never accounts for handing the opponent the ball
+23 yards further upfield, worth about 0.8 points. Same for a missed field goal
+against a punt. The chain fixes it by construction, demonstrably: converting 10%
+of an offence's punts into turnovers -- SAME points scored by that offence --
+moves the margin by -1.06, of which +0.95 goes to the opponent. v2 shows zero
+change.
+
+**On the circularity worry, which the operator raised unprompted and is the
+right question.** A SAMPLED chain would compound error over 22 possessions. This
+one is not sampled: the state distribution is propagated exactly
+
+    outcome_dist = state_dist @ P(outcome | bin)
+    points      += outcome_dist @ POINTS
+    state_dist'  = outcome_dist @ P(next bin | outcome)
+
+so the chain contributes no variance of its own to the point prediction. Model
+error still propagates, but the chain mixes strongly -- every score resets field
+position to a kickoff -- so it forgets errors rather than accumulating them.
+
+**Point prediction: 9.4687 against drive_model_v2's 9.4635.** Identical within
+noise, marginally worse. Predicted in advance and for a stated reason one level
+deeper than the field-position null: the chain propagates turnover-driven field
+position correctly, but a team's turnover rate is itself almost unpredictable
+(prior -> future r = 0.067, the project's own turnover-luck finding). The
+channel is real; its inputs are noise.
+
+**What the chain DOES buy, and it is the first of its kind here.** A correctly
+dispersed and correctly correlated score distribution:
+
+    | quantity                  | simulated | actual |
+    |---------------------------|-----------|--------|
+    | team score sd             | 9.82/10.09| 10.04  |
+    | total sd                  | 13.62     | 13.84  |
+    | margin sd                 | 14.53     | 14.26  |
+    | home/away score corr      | -0.064    | -0.030 |
+
+For comparison, monte_carlo v1's point predictions had sd 2.60 and
+drive_model_v2's 5.13 against an actual 10.04. Nothing else in this project
+produces a joint distribution at all, and this is what P(cover) and P(over)
+require -- the project sits at coin-flip ATS precisely because it has no notion
+of confidence. That capability, not the RMSE, is the reason to keep this.
+
+17 tests, including that the expectation is exact rather than sampled, that the
+chain reduces to the independent-drive model when feedback is removed, that a
+turnover raises the OPPONENT's points, and that the simulated distribution
+matches reality on spread and correlation.
+
 ### What NOT to re-try
 
 - Any single-exponential half-life other than 17 (swept twice now, unimodal).
