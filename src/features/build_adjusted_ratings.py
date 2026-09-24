@@ -11,7 +11,7 @@ Same family of technique as Simple Rating System / Massey ratings: solve
 for every team's offense and defense rating jointly, so a team's rating
 reflects performance relative to the opponents actually faced.
 
-Run: python src/features/build_adjusted_ratings
+Run: python -m src.features.build_adjusted_ratings
 Output: data/processed/adjusted_ratings.parquet
 """
 
@@ -76,14 +76,17 @@ def fit_ratings(
     return off_ratings, def_ratings
 
 
-def main():
-    cfg = load_config()
-    halflife_days = cfg["training"]["recency_half_life_weeks"] * 7
+def build_ratings(
+    team_games: pd.DataFrame, halflife_days: float, min_rows: int = 100
+) -> pd.DataFrame:
+    """One row per (season, week, team): ratings solved at that week's cutoff
+    from games STRICTLY before the week's first kickoff, league-wide.
 
-    team_games = pd.read_parquet("data/processed/team_game_stats.parquet")
-    team_games["gameday"] = pd.to_datetime(team_games["gameday"])
+    Extracted from main() so the leakage rule can be tested on the real loop --
+    the old test fitted its own hand-filtered frame and asserted on its own
+    filter, so it could not fail whatever this loop did.
+    """
     teams = sorted(team_games["team"].unique())
-
     week_cutoffs = (
         team_games[["season", "week"]]
         .drop_duplicates()
@@ -98,7 +101,7 @@ def main():
     for _, cutoff_row in week_cutoffs.iterrows():
         cutoff_date = cutoff_row["gameday"]
         train_games = team_games[team_games["gameday"] < cutoff_date]
-        if len(train_games) < 100:
+        if len(train_games) < min_rows:
             continue
 
         off_ratings, def_ratings = fit_ratings(
@@ -114,12 +117,21 @@ def main():
                     "pregame_adjusted_def_epa_allowed": def_ratings[t],
                 }
             )
+    return pd.DataFrame(rows)
 
-    result = pd.DataFrame(rows)
+
+def main():
+    cfg = load_config()
+    halflife_days = cfg["training"]["recency_half_life_weeks"] * 7
+
+    team_games = pd.read_parquet("data/processed/team_game_stats.parquet")
+    team_games["gameday"] = pd.to_datetime(team_games["gameday"])
+    result = build_ratings(team_games, halflife_days)
+
     out_path = Path("data/processed/adjusted_ratings.parquet")
     result.to_parquet(out_path, index=False)
     print(
-        f"Built adjusted ratings: {len(teams)} teams x "
+        f"Built adjusted ratings: {result['team'].nunique()} teams x "
         f"{result[['season', 'week']].drop_duplicates().shape[0]} week-cutoffs"
     )
     print(f"Saved to {out_path}")

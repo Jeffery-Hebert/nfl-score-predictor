@@ -236,7 +236,8 @@ class TestTheThreeQuestions:
     feature wrongly screened out the first time."""
 
     @pytest.fixture(scope="class")
-    def drives(self):
+    @classmethod
+    def drives(cls):
         return extract_drive_starts()
 
     def test_extraction_agrees_with_nflverse_on_real_data(self, drives):

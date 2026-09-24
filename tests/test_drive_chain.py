@@ -221,7 +221,8 @@ class TestTeamQuality:
 @pytest.mark.requires_data
 class TestAgainstRealData:
     @pytest.fixture(scope="class")
-    def chain(self):
+    @classmethod
+    def chain(cls):
         d = dc.extract_chain_data()
         return d, dc.outcome_given_bin(d), dc.bin_given_outcome(d)
 
@@ -282,3 +283,73 @@ class TestAgainstRealData:
             "the two teams' simulated scores are far more correlated than the "
             "real ones"
         )
+
+
+class TestPossessionRules:
+    """Fixed 2026-09-24. The chain used to alternate possession after EVERY
+    outcome and always gave the home team the opening kickoff. After a returned
+    touchdown the team that threw it receives the next kickoff, and who receives
+    first is a coin toss."""
+
+    @staticmethod
+    def _all(outcome: str) -> np.ndarray:
+        row = np.zeros(N)
+        row[CATS.index(outcome)] = 1.0
+        return np.tile(row, (dc.N_BINS, 1))
+
+    def test_a_pick_six_gives_the_ball_back_to_the_team_that_threw_it(self):
+        """Home throws a pick-six on every drive; away punts on every drive.
+        Home receives after its own pick-six AND after each away punt, so from
+        the second drive on it has the ball every time: 0.5 + 21 home drives,
+        each worth 6.95 to the away team. The old alternating chain gave home
+        exactly 11 drives (76.45 points to away)."""
+        t, o = flat_transition(), opening_at(4)
+        _, away = dc.expected_points(
+            self._all("Opp touchdown"), self._all("Punt"), t, o
+        )
+        assert away == pytest.approx(21.5 * 6.95), (
+            f"away scored {away:.2f}; possession is still alternating after a "
+            "returned touchdown"
+        )
+
+    def test_without_pick_sixes_each_team_gets_exactly_its_drives(self):
+        """With no returned touchdowns possession strictly alternates, so over
+        22 drives each team has 11, whoever wins the coin toss."""
+        home = self._all("Touchdown")
+        away = self._all("Punt")
+        h, a = dc.expected_points(home, away, flat_transition(), opening_at(4))
+        assert h == pytest.approx(11 * 6.95)
+        assert a == pytest.approx(0.0)
+
+    def test_the_opening_kickoff_is_a_coin_toss(self):
+        """Identical teams must score identically -- the first version gave the
+        home team the first possession of every game, a structural home edge
+        unrelated to home-field advantage."""
+        cond = uniform_cond()
+        h, a = dc.expected_points(cond, cond, flat_transition(), opening_at(4), 3)
+        assert h == pytest.approx(a)
+
+    def test_the_sampler_agrees_with_the_exact_expectation(self):
+        """simulate_games and expected_points implement the same rules; their
+        means must agree within Monte Carlo error when pick-sixes are common."""
+        home = np.tile(dist(Touchdown=0.3, **{"Opp touchdown": 0.15}), (dc.N_BINS, 1))
+        away = np.tile(dist(Touchdown=0.2, **{"Field goal": 0.2}), (dc.N_BINS, 1))
+        t, o = flat_transition(), opening_at(4)
+        eh, ea = dc.expected_points(home, away, t, o)
+        sh, sa = dc.simulate_games(home, away, t, o, n_trials=40000, seed=1)
+        assert sh.mean() == pytest.approx(eh, abs=0.25)
+        assert sa.mean() == pytest.approx(ea, abs=0.25)
+
+    def test_transition_rows_come_from_the_right_owner(self):
+        """The pick-six row is estimated from drives where the SAME team had the
+        ball next; every other row from drives where it changed hands."""
+        d = pd.DataFrame(
+            {
+                "result": ["Opp touchdown", "Opp touchdown", "Punt", "Punt"],
+                "possession_changed": [False, True, True, False],
+                "next_bin": [4, 0, 2, 5],
+            }
+        )
+        trans = dc.bin_given_outcome(d)
+        assert trans[CATS.index("Opp touchdown")].argmax() == 4
+        assert trans[CATS.index("Punt")].argmax() == 2

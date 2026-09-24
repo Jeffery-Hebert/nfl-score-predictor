@@ -20,10 +20,9 @@ import pandas as pd
 import pytest
 
 # Reads built parquet from data/, which is gitignored -- excluded from CI.
-pytestmark = pytest.mark.requires_data
+pytestmark = [pytest.mark.requires_data, pytest.mark.backtest_artifacts]
 
 PRED_DIR = Path("data/processed")
-MODEL_TABLE = PRED_DIR / "model_table.parquet"
 PLAUSIBLE_MAX = 70.0
 REQUIRED_COLS = {
     "game_id",
@@ -47,7 +46,7 @@ def _load(name):
     return pd.read_parquet(PRED_DIR / f"{name}_predictions.parquet")
 
 
-pytestmark = [pytestmark, pytest.mark.parametrize("model", _models())]
+pytestmark = pytestmark + [pytest.mark.parametrize("model", _models())]
 
 
 def test_has_the_required_columns(model):
@@ -106,13 +105,16 @@ def test_scored_only_against_played_games(model):
 
 
 def test_not_stale_against_the_current_feature_table(model):
-    """The staleness class of bug: a prediction file built from a feature table
-    that has since been rebuilt is not comparable to anything current."""
-    if not MODEL_TABLE.exists():
-        pytest.skip("model_table.parquet not built")
-    pred_path = PRED_DIR / f"{model}_predictions.parquet"
-    age_h = (MODEL_TABLE.stat().st_mtime - pred_path.stat().st_mtime) / 3600
-    assert age_h <= 0, (
-        f"{model} predictions are {age_h:.1f}h older than model_table.parquet -- "
-        f"re-run the model before comparing it to anything"
-    )
+    """The staleness class of bug: predictions computed from a table that has
+    since changed are not comparable to anything current.
+
+    Judged by CONTENT, from the provenance sidecar each backtest writes
+    (src/validate/backtest_io.py): the played-game rows of every input must
+    still hash the same. This used to compare file modification times, which
+    failed after every rebuild even when nothing had changed -- the false alarm
+    that got the check ignored. Re-run: python -m src.models.run_all --only <model>
+    """
+    from src.validate.backtest_io import stale_inputs
+
+    problems = stale_inputs(model)
+    assert not problems, f"{model} backtest is stale: {problems}"

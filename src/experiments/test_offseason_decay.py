@@ -43,9 +43,9 @@ from sklearn.model_selection import TimeSeriesSplit
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
+from src.features.build_game_features import assemble
 from src.features.build_rolling_features import STAT_COLS, is_finale_week, load_config
 from src.models.common import (
-    BASE_FEATURE_COLS,
     FEATURE_COLS,
     ot_sample_weight,
     recent_residual_offset,
@@ -98,55 +98,27 @@ def add_rolling(group, halflife_days, scheme):
 
 
 def build_table(scheme, halflife_days):
+    """Production's table with the base rolling stats rebuilt under `scheme`.
+
+    Re-pointed 2026-09-24 at the production assembler; it used to assemble its
+    own table without the pass/rush split and crashed once the split joined
+    FEATURE_COLS. The split and injury features are read as built, so the
+    decay scheme is the only thing that varies.
+    """
     tg = pd.read_parquet("data/processed/team_game_stats.parquet")
     tg["gameday"] = pd.to_datetime(tg["gameday"])
     rolled = pd.concat(
         [add_rolling(g.copy(), halflife_days, scheme) for _, g in tg.groupby("team")],
         ignore_index=True,
     )
-    home = rolled[rolled["is_home"] == 1][
-        ["game_id", "team", "opponent", "is_neutral_site", "is_playoff"]
-        + BASE_FEATURE_COLS
-    ].rename(columns={c: f"home_{c}" for c in BASE_FEATURE_COLS})
-    home = home.rename(columns={"team": "home_team", "opponent": "away_team"})
-    away = (
-        rolled[rolled["is_home"] == 0][["game_id", "team"] + BASE_FEATURE_COLS]
-        .rename(columns={c: f"away_{c}" for c in BASE_FEATURE_COLS})
-        .rename(columns={"team": "away_team"})
+    final = assemble(
+        rolled,
+        pd.read_parquet("data/processed/injury_features.parquet"),
+        pd.read_parquet("data/processed/split_efficiency.parquet"),
+        pd.read_parquet("data/raw/schedules.parquet"),
     )
-    merged = home.merge(away, on=["game_id", "away_team"], how="inner")
-
-    inj = pd.read_parquet("data/processed/injury_features.parquet")
-    for side in ("home", "away"):
-        merged = merged.merge(
-            inj[["game_id", "team", "injury_impact"]].rename(
-                columns={
-                    "team": f"{side}_team",
-                    "injury_impact": f"{side}_injury_impact",
-                }
-            ),
-            on=["game_id", f"{side}_team"],
-            how="left",
-        )
-    s = pd.read_parquet("data/raw/schedules.parquet")
-    final = merged.merge(
-        s[
-            [
-                "game_id",
-                "season",
-                "week",
-                "gameday",
-                "home_score",
-                "away_score",
-                "overtime",
-            ]
-        ],
-        on="game_id",
-        how="left",
-    )
-    final["went_to_ot"] = final["overtime"].fillna(0).astype(int)
     final["gameday"] = pd.to_datetime(final["gameday"])
-    return final.drop(columns=["overtime"])
+    return final
 
 
 def make_fns(kind):

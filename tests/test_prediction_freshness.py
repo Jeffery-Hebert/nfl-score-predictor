@@ -114,7 +114,7 @@ class TestRawPullBehind:
         with pytest.raises(SystemExit) as e:
             predict_week.assert_training_is_current(train, today + pd.Timedelta(days=4))
         msg = str(e.value)
-        assert "pull_schedules" in msg  # re-pull, not rebuild
+        assert "src.ingest.pull_all" in msg  # re-pull, not rebuild
 
     def test_an_old_cancelled_game_does_not_trip_it_forever(self, sched_file):
         """2021 BUF@CIN was abandoned and never got a score. A guard that
@@ -160,7 +160,8 @@ class TestRawPullBehind:
 @pytest.mark.requires_data
 class TestUpcomingWeekIsPredictable:
     @pytest.fixture(scope="class")
-    def upcoming(self):
+    @classmethod
+    def upcoming(cls):
         from src.models.common import FEATURE_COLS
 
         table = pd.read_parquet("data/processed/model_table.parquet")
@@ -413,9 +414,13 @@ class TestTrainingCutoffFollowsPendingGames:
 
     @staticmethod
     def _cutoff(week, now):
-        """The selection predict_week.main() performs."""
-        pending = week[week["kickoff"].isna() | (week["kickoff"] > now)]
-        return pending["gameday"].min(), len(pending)
+        """The selection predict_week.main() performs -- through the SAME
+        functions it calls. (This used to re-implement the selection inline, so
+        a change to main() could not have failed it.)"""
+        pending = predict_week.select_pending(week, now)
+        if pending.empty:
+            return None, 0
+        return predict_week.training_cutoff(pending), len(pending)
 
     def test_thursday_run_uses_the_first_game_of_the_week(self):
         cutoff, n = self._cutoff(self._week(), pd.Timestamp("2026-09-17T18:00Z"))
@@ -453,3 +458,50 @@ class TestTrainingCutoffFollowsPendingGames:
             "predict_week must exit rather than write a forecast for a week that "
             "is entirely in the past -- that is a backfill, not a prediction"
         )
+
+
+class TestNotReForecastGamesAreKept:
+    """A run can now leave games out on purpose -- their final injury report is
+    not published yet -- and an earlier forecast of such a game is still a real
+    pre-kickoff record. The first merge rule kept only STARTED games, so those
+    rows would have been dropped from the week's file."""
+
+    @staticmethod
+    def _row(game_id, kickoff, home=24.0, generated="2026-09-24T18:00:00+00:00"):
+        return {
+            "game_id": game_id,
+            "gameday": pd.Timestamp(kickoff).tz_localize(None).normalize(),
+            "kickoff": pd.Timestamp(kickoff, tz="UTC"),
+            "combined_home": home,
+            "combined_away": 20.0,
+            "generated_at": generated,
+        }
+
+    def test_a_game_left_out_of_this_run_keeps_its_forecast(self, tmp_path):
+        path = tmp_path / "2026_wk03.parquet"
+        pd.DataFrame(
+            [
+                self._row("THU", "2026-09-25T00:15:00", home=24.0),
+                self._row("SUN", "2026-09-27T17:00:00", home=21.0),
+            ]
+        ).to_parquet(path, index=False)
+        # Thursday run, before the Sunday report: only THU is re-forecast.
+        fresh = pd.DataFrame(
+            [self._row("THU", "2026-09-25T00:15:00", home=26.0, generated="LATER")]
+        )
+        now = pd.Timestamp("2026-09-24T20:00:00", tz="UTC")
+        got = predict_week.freeze_started_games(fresh, path, now).set_index("game_id")
+        assert set(got.index) == {"THU", "SUN"}, "the Sunday forecast was dropped"
+        assert got.loc["SUN", "combined_home"] == 21.0
+        assert got.loc["THU", "combined_home"] == 26.0, "THU had not kicked off"
+
+    def test_output_is_in_kickoff_order(self, tmp_path):
+        path = tmp_path / "2026_wk03.parquet"
+        pd.DataFrame([self._row("MON", "2026-09-29T00:15:00")]).to_parquet(
+            path, index=False
+        )
+        fresh = pd.DataFrame([self._row("THU", "2026-09-25T00:15:00")])
+        got = predict_week.freeze_started_games(
+            fresh, path, pd.Timestamp("2026-09-24T20:00:00", tz="UTC")
+        )
+        assert list(got["game_id"]) == ["THU", "MON"]

@@ -10,9 +10,11 @@ Run: python src/models/baseline.py
 """
 
 import pandas as pd
-from pathlib import Path
 from src.models.common import ot_sample_weight
+from src.validate.backtest_io import save_predictions
 from src.validate.walk_forward import walk_forward_evaluate, score_predictions
+
+MODEL_TABLE = "data/processed/model_table.parquet"
 
 
 def fit_baseline(train: pd.DataFrame) -> dict:
@@ -39,10 +41,26 @@ def fit_baseline(train: pd.DataFrame) -> dict:
     home_field_adj = float(
         np.average(margin, weights=w) if w is not None else margin.mean()
     )
-    return {"home_field_adj": home_field_adj}
+    # Cold-start fallback from the TRAINING fold, like every other model's
+    # imputation. It used to be the mean over the test week itself -- harmless
+    # (pregame features are known before kickoff) but the one place a model read
+    # statistics of the rows it was predicting.
+    fallback = float(
+        np.nanmean(
+            np.concatenate(
+                [
+                    train["home_pregame_team_score"].to_numpy(float),
+                    train["away_pregame_team_score"].to_numpy(float),
+                ]
+            )
+        )
+    )
+    return {"home_field_adj": home_field_adj, "fallback_score": fallback}
 
 
 def predict_baseline(model: dict, test: pd.DataFrame):
+    import numpy as np
+
     # C3: a neutral-site game gets no home-field adjustment.
     if "is_neutral_site" in test.columns:
         adj = model["home_field_adj"] * (1 - test["is_neutral_site"])
@@ -58,8 +76,9 @@ def predict_baseline(model: dict, test: pd.DataFrame):
         + 0.5 * test["home_pregame_opp_score"]
         - adj / 2
     )
-    home_pred = home_pred.fillna(test["home_pregame_team_score"].mean())
-    away_pred = away_pred.fillna(test["away_pregame_team_score"].mean())
+    fallback = model.get("fallback_score", np.nan)
+    home_pred = home_pred.fillna(fallback + adj / 2)
+    away_pred = away_pred.fillna(fallback - adj / 2)
     return home_pred, away_pred
 
 
@@ -75,7 +94,7 @@ def predict_league_average(model: dict, test: pd.DataFrame):
 
 
 def main():
-    df = pd.read_parquet("data/processed/model_table.parquet")
+    df = pd.read_parquet(MODEL_TABLE)
     results = walk_forward_evaluate(
         df, fit_baseline, predict_baseline, min_train_seasons=2
     )
@@ -85,9 +104,7 @@ def main():
     for k, v in metrics.items():
         print(f"  {k}: {v:.3f}" if isinstance(v, float) else f"  {k}: {v}")
 
-    out_path = Path("data/processed/baseline_predictions.parquet")
-    results.to_parquet(out_path, index=False)
-    print(f"Saved fold-by-fold predictions to {out_path}")
+    save_predictions(results, "baseline", inputs=[MODEL_TABLE])
 
     floor_results = walk_forward_evaluate(
         df, fit_league_average, predict_league_average, min_train_seasons=2

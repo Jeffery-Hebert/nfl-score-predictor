@@ -44,7 +44,27 @@ import pandas as pd
 PRED_DIR = Path("data/predictions")
 TEMPLATE = Path(__file__).with_name("report_template.html")
 OUT = PRED_DIR / "index.html"
-MODELS = ["combined", "linear", "poisson", "gp"]
+# Which models the page shows is read from the records themselves: every
+# <name>_home/<name>_away pair in a week's parquet, except these. The list used
+# to be hard-coded, so changing the live models in config.yaml would have
+# silently dropped the new ones from the ledger.
+NOT_SHOWN = {"market", "baseline", "act"}
+LABELS = {
+    "combined": "Combined",
+    "linear": "Linear",
+    "poisson": "Poisson",
+    "gp": "Gauss. Proc.",
+    "rf": "Rand. Forest",
+    "xgb": "XGBoost",
+    "lgbm": "LightGBM",
+    "catboost": "CatBoost",
+    "mlp": "MLP",
+    "bayesian": "Bayesian",
+    "rnn": "RNN",
+    "drivev2": "Drive v2",
+    "montecarlo": "Monte Carlo",
+    "logistic": "Logistic",
+}
 
 # The template holds no <html>/<head> of its own so that the same file can be
 # published as an artifact, where the host supplies them. Opened from disk it
@@ -75,24 +95,37 @@ def kickoff_index() -> pd.Series:
 
     Fallback only. predict_week stores a `kickoff` column on every week it
     writes, and that stored value is preferred -- it is part of the record. This
-    exists for weeks written before that column did, which would otherwise have
-    nothing finer than a date to sort on.
-
-    NOTE: this is the same gameday + gametime -> US/Eastern -> UTC construction
-    as predict_week.kickoff_utc() and build_injury_features.kickoff_times().
-    Three copies is two too many; it is duplicated here rather than imported
-    because predict_week pulls in all four models (and sklearn with them), which
-    would turn this one-second script into a several-second one. Worth
-    consolidating into a shared schedule helper.
+    exists for weeks written before that column did. The construction is the
+    shared one in src/schedule.py, which imports nothing but pandas, so this
+    stays a one-second script.
     """
-    s = pd.read_parquet("data/raw/schedules.parquet")
-    ts = pd.to_datetime(
-        s["gameday"].astype(str) + " " + s["gametime"].fillna("13:00"), errors="coerce"
-    )
-    ts = ts.dt.tz_localize(
-        "US/Eastern", ambiguous="NaT", nonexistent="NaT"
-    ).dt.tz_convert("UTC")
-    return pd.Series(ts.to_numpy(), index=s["game_id"].to_numpy())
+    from src.schedule import kickoff_by_game
+
+    return kickoff_by_game(pd.read_parquet("data/raw/schedules.parquet"))
+
+
+def models_in(df: pd.DataFrame) -> list[str]:
+    """Model prefixes with both a _home and an _away column, in column order."""
+    return [
+        c[: -len("_home")]
+        for c in df.columns
+        if c.endswith("_home")
+        and f"{c[: -len('_home')]}_away" in df.columns
+        and c[: -len("_home")] not in NOT_SHOWN
+    ]
+
+
+def display_order(found: set[str]) -> list[str]:
+    """Composite first, then the live models in config order, then anything an
+    older week carries that the config no longer names."""
+    try:
+        from src.config import live_settings
+
+        live = live_settings()
+        head = [live["composite"]["name"]] + live["models"]
+    except Exception:  # a page must still render without a valid config
+        head = ["combined"]
+    return [m for m in head if m in found] + sorted(found - set(head))
 
 
 def grade(models: dict, actual: dict) -> dict:
@@ -156,9 +189,10 @@ def week_payload(path: Path, actuals: pd.DataFrame, kickoffs: pd.Series) -> dict
     ).reset_index(drop=True)
 
     games, graded = [], 0
+    week_models = models_in(df)
     for _, r in df.iterrows():
         models = {}
-        for m in MODELS:
+        for m in week_models:
             if f"{m}_home" not in df.columns or pd.isna(r[f"{m}_home"]):
                 continue
             models[m] = {
@@ -202,6 +236,11 @@ def week_payload(path: Path, actuals: pd.DataFrame, kickoffs: pd.Series) -> dict
         g["backfilled"] = bool(
             pd.notna(made) and pd.notna(r["_kick"]) and made > r["_kick"]
         )
+        # Forecast before the game's FINAL injury report was in the data (only
+        # possible with --allow-unsettled-injuries). Weeks written before the
+        # column existed carry no flag rather than a guessed one.
+        final = r.get("injury_report_final")
+        g["provisional"] = bool(pd.notna(final) and not bool(final))
         if pd.notna(r.get("act_home")):
             g["actual"] = {"away": float(r["act_away"]), "home": float(r["act_home"])}
             g["grade"] = grade(models, g["actual"])
@@ -210,7 +249,7 @@ def week_payload(path: Path, actuals: pd.DataFrame, kickoffs: pd.Series) -> dict
 
     summary = {}
     if graded:
-        for m in MODELS:
+        for m in week_models:
             rows = [g["grade"][m] for g in games if "grade" in g and m in g["grade"]]
             if not rows:
                 continue
@@ -224,6 +263,8 @@ def week_payload(path: Path, actuals: pd.DataFrame, kickoffs: pd.Series) -> dict
             }
     n_backfilled = sum(g["backfilled"] for g in games)
     return {
+        "models": week_models,
+        "n_provisional": int(sum(g["provisional"] for g in games)),
         "season": int(df["season"].iloc[0]),
         "week": int(df["week"].iloc[0]),
         "trained_through": str(df["trained_through"].max()),
@@ -253,8 +294,13 @@ def build() -> dict:
     kickoffs = kickoff_index()
     weeks = [week_payload(f, actuals, kickoffs) for f in files]
     weeks.sort(key=lambda w: (w["season"], w["week"]))
+    order = display_order({m for w in weeks for m in w["models"]})
+    composite = order[0] if order else "combined"
     return {
         "built_at": datetime.now(timezone.utc).isoformat(),
+        # [key, label] in display order; the page draws one column per entry.
+        "models": [[m, LABELS.get(m, m.title())] for m in order],
+        "composite": composite,
         "weeks": weeks,
     }
 

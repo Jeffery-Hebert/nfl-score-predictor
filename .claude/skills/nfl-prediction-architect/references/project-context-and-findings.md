@@ -9,7 +9,7 @@ Read this fully before proposing any new feature or architectural change. It exi
 - **Unused-but-retained models** (in `src/models/unused/`): `random_forest.py`, `xgboost_model.py`, `catboost_model.py`, `lightgbm_model.py`, `logistic.py`, `mlp.py`, `bayesian_hierarchical.py`, `rnn_lstm.py`, `monte_carlo.py`.
 - **Feature set (`src/models/common.py` FEATURE_COLS):** 24 columns — home/away pregame team-level rolling scoring, success rate, rest days, prior games played (12 -- blended off/def EPA per play was REMOVED 2026-09-17, superseded by the split); `injury_impact` per side (2); volume-weighted shrunk pass/rush EPA splits, offence and defence, per side (8); `is_neutral_site`/`is_playoff` (2). (This line read "16 columns" until 2026-09-17; it had not been updated when injuries and the split shipped.) Built via `src/features/build_rolling_features.py` (EWM, halflife = 17 weeks / 119 days, leakage-safe via `shift(1)`) → `build_game_features.py` → `model_table.parquet`.
 - **Finale-week masking:** `is_finale_week()` (week 17 for 2019–2020, week 18 for 2021+) masks finale-week stats from contributing to future EWM averages, preventing rested-starters blowouts from contaminating next season's early-week features. Confirmed via schema check (`game_type` column cleanly separates REG/WC/DIV/CON/SB) and a synthetic leakage test. **Measured effect: no statistically significant change to accuracy** (kept anyway — theoretically sound, zero cost, harmless). Applied in *both* `build_rolling_features.py` and `build_drive_rolling_features.py`. **Correction (2026-09-14):** an earlier revision of this file called the drive-level version an "incomplete fix" because the `.where()` step looked absent. A previous pass through this document then over-corrected, claiming commit `2dc3f67` had resolved it. Both were wrong. `2dc3f67` did add `.where(~finale_mask)`, but the same commit made `add_pregame_rolling_drive_features` read `season`/`week`, which `main()` never merged in from schedules (`drive_stats.parquet` carries neither). The stage therefore **crashed with `KeyError: 'season'` on every run from `2dc3f67` onward**, and `team_drive_rolling_features.parquet` on disk was left stale from before that commit. Nothing detected it: there was no leakage test for the drive path, and its only consumer (Monte Carlo) was not being run. Found by `src/features/build_all.py` on first execution. Fixed by adding `season`/`week` to the schedules merge, and covered now by `tests/test_drive_rolling_leakage.py` (4 tests, mutation-verified). Lesson: a code-reading pass confirmed the fix was present but could not confirm the stage could *execute* — running it was what found the bug.
-- **Pipeline runner + provenance:** `python -m src.features.build_all` runs all 11 feature stages in verified dependency order (~47s end to end on the operator's machine, from an existing `data/raw/` snapshot) and writes `data/processed/_manifest.json` recording git sha, per-stage timing, row counts and output hashes. `tests/test_pipeline_freshness.py` fails if any output is older than an input or has been modified out of band. Added after `model_table.parquet` was found carrying a timestamp 94 minutes older than the table it derives from. Feature builds are cheap; the expensive step is GP model fitting, not feature construction.
+- **Pipeline runner + provenance:** `python -m src.features.build_all` runs all 11 feature stages in verified dependency order (~47s end to end on the operator's machine, from an existing `data/raw/` snapshot) and writes `data/processed/_manifest.json` recording git sha, per-stage timing, row counts and output hashes. `tests/test_pipeline_freshness.py` fails if any input's content has changed since its stage read it (the manifest fingerprints every input; for `config.yaml` only the `training` block, the one section feature builders read), or if an output has been modified out of band. [2026-09-24: this compared mtimes until then, and failed on every comment edit to config.yaml.] Added after `model_table.parquet` was found carrying a timestamp 94 minutes older than the table it derives from. Feature builds are cheap; the expensive step is GP model fitting, not feature construction.
 - **Baseline out-of-sample performance (Linear/Poisson/GP on current feature set):** home_rmse ≈ 9.52–9.54, away_rmse ≈ 9.24–9.25 (walk-forward, min_train_seasons=2, ~1,426 test games spanning 2021–2026).
 
 ## Closed Null Results — Do Not Re-Propose Without New Evidence
@@ -728,6 +728,14 @@ the best pass defences.
 
 ### 7. Roster continuity: no on accuracy, real on calibration.
 
+> **INVALIDATED 2026-09-24 -- re-run before relying on it.** `build_continuity` had a
+> loop-variable bug (the carryover loop reused `lu`, the current game's line-up),
+> so from the second season on each game entered the history one game late, week 1
+> counted twice and each season's last game never counted. Tenure and carryover were
+> both wrong in the numbers below. Fixed, with regression tests, in
+> `tests/test_continuity_leakage.py::TestHistoryUpdateUsesTheCurrentGame`. The
+> `+continuity` arm of `test_relational_features.py` has not been re-run.
+
 Three measures from snap counts -- cross-season carryover, within-season line-up
 stability, snap-weighted tenure. The ONLY arm carrying genuinely new information
 rather than a re-cut of play-by-play.
@@ -987,9 +995,13 @@ competitive, and the A5 finding blamed the stack's failure on its base models
 being near-duplicates of each other. A stack of Poisson + drive_model_v2 pairs
 two genuinely decorrelated predictors for the first time. Untested.
 
+> **Update:** it was tested -- `src/experiments/test_drive_blend.py` (in-fold blend and
+> ridge meta). See its output; the 2026-09-24 model report also scores walk-forward
+> composite weightings.
+
 ## Real, Unresolved Gaps (Worth Pursuing With New Data or New Direction, Not New Cuts of Old Data)
 
-- **No injury/inactive/depth-chart data source.** This is the single most-cited real gap across every session — the model has no visibility into who is actually playing, which is the dominant driver of the QB-identity and finale-week findings above. Solving this requires a new data source, not new feature engineering on existing play-by-play.
+- ~~**No injury/inactive/depth-chart data source.**~~ **Resolved 2026-09-15** (`injury_impact`, the first confirmed feature win). What remains is TIMING: the final report arrives shortly before each game, so live forecasts must wait for it -- enforced since 2026-09-24 by `src/predict/injury_readiness.py`. Original note: this was the single most-cited real gap across every session — the model has no visibility into who is actually playing, which is the dominant driver of the QB-identity and finale-week findings above. Solving this requires a new data source, not new feature engineering on existing play-by-play.
 - **Live starting-QB determination for future games** has no operational answer yet (historical backtesting used actual post-hoc starters, which isn't available before a real future game is played).
 - **The original evidence for reducing `stacking.py` from 13 to 3 base models has not been directly reviewed** in these sessions; the operator confirmed the decision was intentional, but the underlying comparison data was not re-examined.
 - **A more surgical "meaningful game" flag** (using standings/playoff-clinch logic instead of blanket finale-week masking) was proposed as a theoretically more precise alternative but never built — the current blanket week-based mask was chosen as the cheaper first test.
@@ -999,3 +1011,47 @@ two genuinely decorrelated predictors for the first time. Untested.
 - The operator's machine (Jeff's T490s) has limited cores; Gaussian Process walk-forward runs take on the order of 20+ minutes per full pass — always add or confirm progress logging before running anything of that scale, and get explicit confirmation before running GP twice in one script (e.g., base vs. extended feature comparisons).
 - `black` is the formatting standard; run `black .` after any file edit before committing.
 - Recurring failure pattern to avoid: giving integration code against an *inferred* schema instead of a verified one (caused a real bug in `build_drive_rolling_features.py` once). Always request or read the actual file/schema before writing code that depends on its exact structure.
+
+## Session 2026-09-24: correctness sweep, full re-benchmark
+
+Everything below was found by reading the code line by line, then verified with a
+measurement before it was fixed. The model report (`python -m src.validate.model_report`)
+has the benchmark numbers; README section 9 summarises them.
+
+Bugs that changed PREDICTIONS:
+- **Live Ridge fit saw rows in the wrong order.** `predict_week` passed model_table
+  as stored (grouped by home team) to RidgeCV's TimeSeriesSplit, so the live fit's
+  "time" folds were team blocks: alpha 562 live vs 100 in date order, Linear up to
+  0.7 pts off the model the backtest validated. Fit functions now sort themselves
+  (`common.chronological`); `tests/test_live_fit_order.py` fails if they stop.
+- **Bayesian model never converged** (raw target, intercept prior at 20, 3,000 ADVI
+  steps): -2.50 home bias. Centred target + Adam 30k steps: RMSE 9.570 -> 9.410.
+- **RNN was degenerate** (prediction sd 0.5): raw-score regression, 100 steps.
+  Standardised target + chronological early stopping: 9.884 -> 9.534.
+- **Shelved models lacked production's corrections** (OT weighting, drift offset),
+  so they were compared unfairly; away bias ~+0.65 -> ~+0.27.
+- **Drive table dropped all 16 of Oakland's 2019 games** (schedule says OAK,
+  play-by-play LV) and could not forecast unplayed games at all. Both fixed; every
+  pre-existing row byte-identical.
+- **Drive chain** gave the ball to the wrong team after a pick-six and the home team
+  the opening kickoff every game.
+- **Monte Carlo v1** predictions depended on fold order (shared RNG).
+- **Composite averaged rounded members**; now averages unrounded forecasts.
+
+Operational:
+- **Forecasting before the final injury report** is now refused per game (the
+  Thursday-of-week-3 report had 8 of 259 statuses). `--allow-unsettled-injuries`
+  overrides and tags the forecast.
+- **The Sunday routine's push fails** (403: the Claude GitHub App has no access to
+  the repo), so its forecasts never reach origin. Week 2's Sunday refresh was lost.
+- Staleness is now judged by a hash of the PLAYED rows a backtest read, not mtimes.
+- The feature-build freshness gate likewise compares input fingerprints recorded
+  by `build_all`, not mtimes. The composite backtest now REFUSES members that
+  disagree on a game's score (one was run on an older table) instead of quietly
+  dropping the game from the inner join.
+- Validated end to end: the live fit path reproduces the walk-forward backtest
+  for past weeks (baseline/Poisson/linear to 4e-15, GP to 2e-10), and the week 3
+  record reproduces bit-for-bit from the committed code and rebuilt data.
+
+Stale-experiment repairs: `tune_halflife.py` (now reproduces production exactly at
+17 weeks), `test_offseason_decay.py`, `test_injury_features.py`.

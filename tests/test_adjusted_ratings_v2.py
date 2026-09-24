@@ -219,7 +219,8 @@ class TestOrientation:
 @pytest.mark.requires_data
 class TestAgainstRealData:
     @pytest.fixture(scope="class")
-    def built(self):
+    @classmethod
+    def built(cls):
         return build_adjusted_ratings()
 
     def test_every_team_has_a_rating_at_every_cutoff(self, built):

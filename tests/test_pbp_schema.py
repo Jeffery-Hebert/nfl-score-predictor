@@ -37,8 +37,12 @@ def test_expected_columns_present(df):
 
 
 def test_season_range(df):
-    assert df["season"].min() >= 2019
-    assert df["season"].max() <= 2026
+    """Bounded by the ingest's own definition, not a hard-coded year -- this
+    asserted `<= 2026` and would have failed the first pull of 2027."""
+    from src.ingest.seasons import SEASON_START, current_season
+
+    assert df["season"].min() >= SEASON_START
+    assert df["season"].max() <= current_season()
 
 
 def test_epa_reasonable_range(df):

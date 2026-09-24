@@ -9,6 +9,8 @@ Output: data/processed/drive_model_table.parquet
 import pandas as pd
 from pathlib import Path
 
+from src.features.build_team_game_stats import normalize_team_codes
+
 CATS = [
     "touchdown",
     "field_goal",
@@ -44,6 +46,10 @@ def main():
     merged = merged[merged["home_team"] != merged["away_team"]]  # drop self-joins
 
     schedules = pd.read_parquet("data/raw/schedules.parquet")
+    # Play-by-play already codes the 2019 Raiders as LV; the schedule still says
+    # OAK. Merging on team names without normalising silently dropped all 16 of
+    # their 2019 games from this table.
+    schedules = normalize_team_codes(schedules.copy(), ["home_team", "away_team"])
     final = merged.merge(
         schedules[
             [

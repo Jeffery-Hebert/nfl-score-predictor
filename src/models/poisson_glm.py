@@ -30,7 +30,10 @@ from src.models.common import (
     ot_sample_weight,
     recent_residual_offset,
 )
+from src.validate.backtest_io import save_predictions
 from src.validate.walk_forward import walk_forward_evaluate, score_predictions
+
+MODEL_TABLE = "data/processed/model_table.parquet"
 
 from sklearn.preprocessing import StandardScaler
 
@@ -75,7 +78,7 @@ def predict_poisson(model: dict, test: pd.DataFrame):
 
 
 def main():
-    df = pd.read_parquet("data/processed/model_table.parquet")
+    df = pd.read_parquet(MODEL_TABLE)
     results = walk_forward_evaluate(
         df, fit_poisson, predict_poisson, min_train_seasons=2
     )
@@ -83,7 +86,7 @@ def main():
     print("Poisson GLM walk-forward results:")
     for k, v in metrics.items():
         print(f"  {k}: {v:.3f}" if isinstance(v, float) else f"  {k}: {v}")
-    results.to_parquet("data/processed/poisson_predictions.parquet", index=False)
+    save_predictions(results, "poisson", inputs=[MODEL_TABLE])
 
 
 if __name__ == "__main__":

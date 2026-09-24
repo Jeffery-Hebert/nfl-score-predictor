@@ -21,6 +21,8 @@ import pandas as pd
 from sklearn.linear_model import RidgeCV
 from sklearn.model_selection import TimeSeriesSplit
 from sklearn.preprocessing import StandardScaler
+from src.models.common import chronological
+from src.validate.backtest_io import predictions_path, save_predictions
 from src.validate.walk_forward import walk_forward_evaluate, score_predictions
 
 BASE_MODELS = ["linear", "poisson", "gp"]
@@ -58,6 +60,8 @@ def load_meta_table() -> pd.DataFrame:
 
 
 def fit_stack(train: pd.DataFrame) -> dict:
+    # RidgeCV's TimeSeriesSplit needs oldest-first rows -- see chronological().
+    train = chronological(train)
     home_cols = [c for c in train.columns if c.endswith("_home_pred")]
     away_cols = [c for c in train.columns if c.endswith("_away_pred")]
 
@@ -100,7 +104,10 @@ def main():
     print("\nStacking Meta-Model walk-forward results:")
     for k, v in metrics.items():
         print(f"  {k}: {v:.3f}" if isinstance(v, float) else f"  {k}: {v}")
-    results.to_parquet("data/processed/stacking_predictions.parquet", index=False)
+    inputs = [predictions_path(n) for n in BASE_MODELS if predictions_path(n).exists()]
+    save_predictions(
+        results, "stacking", inputs=inputs + ["data/raw/schedules.parquet"]
+    )
 
 
 if __name__ == "__main__":

@@ -17,33 +17,22 @@ than per-model.
 Run: pytest tests/test_stacking_freshness.py -v
 """
 
-from pathlib import Path
-
 import pytest
 
 # Reads built parquet from data/, which is gitignored -- excluded from CI.
-pytestmark = pytest.mark.requires_data
-
-PRED_DIR = Path("data/processed")
+pytestmark = [pytest.mark.requires_data, pytest.mark.backtest_artifacts]
 
 
 def test_stacking_is_not_older_than_its_base_models():
-    from src.models.stacking import BASE_MODELS
+    """The stack's provenance sidecar records a hash of every base prediction
+    file it read; a re-run base model changes that hash. (This used to compare
+    modification times.)"""
+    from src.validate.backtest_io import predictions_path, stale_inputs
 
-    stack = PRED_DIR / "stacking_predictions.parquet"
-    if not stack.exists():
+    if not predictions_path("stacking").exists():
         pytest.skip("stacking has not been run")
-    stack_mtime = stack.stat().st_mtime
-
-    stale = []
-    for base in BASE_MODELS:
-        p = PRED_DIR / f"{base}_predictions.parquet"
-        if not p.exists():
-            continue
-        age_min = (p.stat().st_mtime - stack_mtime) / 60
-        if age_min > 0:
-            stale.append(f"{base} is {age_min:.0f} min newer than the stack")
+    stale = [p for p in stale_inputs("stacking") if "_predictions" in p]
     assert not stale, (
         f"stacking was built from out-of-date base predictions: {stale}. "
-        "Re-run: python -m src.models.stacking"
+        "Re-run: python -m src.models.run_all --only stacking"
     )

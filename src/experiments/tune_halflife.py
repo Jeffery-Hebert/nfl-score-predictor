@@ -17,14 +17,14 @@ data/processed.
 Run: python -m src.experiments.tune_halflife
 """
 
-import numpy as np
 import pandas as pd
-from sklearn.linear_model import LinearRegression, PoissonRegressor
-from sklearn.preprocessing import StandardScaler
 
+from src.features.build_game_features import assemble
 from src.features.build_rolling_features import add_pregame_rolling_features
+from src.features.build_split_efficiency import build_split_efficiency
 from src.models.baseline import fit_baseline, predict_baseline
-from src.models.common import BASE_FEATURE_COLS, FEATURE_COLS, ot_sample_weight
+from src.models.linear import fit_linear, predict_linear
+from src.models.poisson_glm import fit_poisson, predict_poisson
 from src.validate.walk_forward import score_predictions, walk_forward_evaluate
 
 HALFLIFE_WEEKS = [4, 8, 12, 17, 26, 39, 52]
@@ -33,93 +33,35 @@ HALFLIFE_WEEKS = [4, 8, 12, 17, 26, 39, 52]
 def build_model_table(
     team_games: pd.DataFrame, schedules: pd.DataFrame, halflife_days: float
 ):
-    """In-memory equivalent of build_rolling_features -> build_game_features."""
-    pieces = [
-        add_pregame_rolling_features(g.copy(), halflife_days)
-        for _, g in team_games.groupby("team")
-    ]
-    rolling = pd.concat(pieces, ignore_index=True)
+    """The full production feature table rebuilt at a candidate half-life.
 
-    home = rolling[rolling["is_home"] == 1][
-        ["game_id", "team", "opponent", "is_neutral_site", "is_playoff"]
-        + BASE_FEATURE_COLS
-    ].rename(columns={c: f"home_{c}" for c in BASE_FEATURE_COLS})
-    home = home.rename(columns={"team": "home_team", "opponent": "away_team"})
-
-    away = rolling[rolling["is_home"] == 0][
-        ["game_id", "team"] + BASE_FEATURE_COLS
-    ].rename(columns={c: f"away_{c}" for c in BASE_FEATURE_COLS})
-    away = away.rename(columns={"team": "away_team"})
-
-    merged = home.merge(away, on=["game_id", "away_team"], how="inner")
-    final = merged.merge(
-        schedules[
-            [
-                "game_id",
-                "season",
-                "week",
-                "gameday",
-                "home_score",
-                "away_score",
-                "overtime",
-            ]
+    Re-pointed 2026-09-24 at the production assembler: this used to rebuild only
+    the base rolling columns, and crashed with a KeyError once injury_impact and
+    the pass/rush split joined FEATURE_COLS. The half-life now varies EVERY
+    recency-weighted feature it governs in production -- the rolling stats and
+    the split efficiencies -- while injury_impact (not recency-weighted) is read
+    as built.
+    """
+    rolling = pd.concat(
+        [
+            add_pregame_rolling_features(g.copy(), halflife_days)
+            for _, g in team_games.groupby("team")
         ],
-        on="game_id",
-        how="left",
+        ignore_index=True,
     )
-    final["went_to_ot"] = final["overtime"].fillna(0).astype(int)
-    return final.drop(columns=["overtime"])
+    split = build_split_efficiency(team_games, halflife_days)
+    injuries = pd.read_parquet("data/processed/injury_features.parquet")
+    return assemble(rolling, injuries, split, schedules)
 
 
 def linear_fns():
-    def fit(train):
-        X = train[FEATURE_COLS]
-        means = X.mean()
-        return {
-            "h": LinearRegression().fit(
-                X.fillna(means),
-                train["home_score"],
-                sample_weight=ot_sample_weight(train),
-            ),
-            "a": LinearRegression().fit(
-                X.fillna(means),
-                train["away_score"],
-                sample_weight=ot_sample_weight(train),
-            ),
-            "means": means,
-        }
-
-    def predict(m, test):
-        X = test[FEATURE_COLS].fillna(m["means"])
-        return m["h"].predict(X), m["a"].predict(X)
-
-    return fit, predict
+    """The production estimator (RidgeCV), not the unregularised OLS this
+    script originally used."""
+    return fit_linear, predict_linear
 
 
 def poisson_fns():
-    def fit(train):
-        X = train[FEATURE_COLS]
-        means = X.mean()
-        Xf = X.fillna(means)
-        sc = StandardScaler().fit(Xf)
-        Xs = sc.transform(Xf)
-        w = ot_sample_weight(train)
-        return {
-            "h": PoissonRegressor(max_iter=300).fit(
-                Xs, train["home_score"], sample_weight=w
-            ),
-            "a": PoissonRegressor(max_iter=300).fit(
-                Xs, train["away_score"], sample_weight=w
-            ),
-            "means": means,
-            "scaler": sc,
-        }
-
-    def predict(m, test):
-        Xs = m["scaler"].transform(test[FEATURE_COLS].fillna(m["means"]))
-        return m["h"].predict(Xs), m["a"].predict(Xs)
-
-    return fit, predict
+    return fit_poisson, predict_poisson
 
 
 def main():

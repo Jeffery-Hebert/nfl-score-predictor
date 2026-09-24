@@ -235,7 +235,8 @@ class TestTeamsAreIndependent:
 @pytest.mark.requires_data
 class TestAgainstRealData:
     @pytest.fixture(scope="class")
-    def built(self):
+    @classmethod
+    def built(cls):
         return build_continuity()
 
     def test_measures_are_in_their_defined_ranges(self, built):
@@ -269,3 +270,46 @@ class TestAgainstRealData:
         c = built[CONTINUITY_COLS].corr().abs()
         offdiag = c.to_numpy()[~np.eye(len(CONTINUITY_COLS), dtype=bool)]
         assert offdiag.max() < 0.9, f"continuity measures are collinear:\n{c}"
+
+
+class TestHistoryUpdateUsesTheCurrentGame:
+    """Regression gates for the 2026-09-24 fix.
+
+    The carryover loop reused the variable holding the current game's line-up,
+    so from the second season onward the history was updated with the PREVIOUS
+    game's players: each game entered one game late, week 1 was counted twice
+    and each season's final game never counted. Every earlier test passed,
+    because none pinned a value in a second season with a changing line-up.
+    """
+
+    def test_tenure_counts_every_prior_appearance_in_a_later_season(self):
+        s = snaps(
+            [
+                ("2023-09-10", 2023, "AAA", ["a"]),
+                ("2024-09-08", 2024, "AAA", ["a"]),
+                ("2024-09-15", 2024, "AAA", ["b"]),
+                ("2024-09-22", 2024, "AAA", ["b"]),
+                ("2024-09-29", 2024, "AAA", ["b"]),
+            ]
+        )
+        got = build_continuity(s).set_index("game_id").loc["g4", "snap_weighted_tenure"]
+        assert got == pytest.approx(2.0), (
+            f"b played g2 and g3 before g4, so tenure is 2 -- got {got}; the "
+            "history is being updated with the wrong game's line-up"
+        )
+
+    def test_a_seasons_final_game_counts_toward_next_seasons_carryover(self):
+        s = snaps(
+            [
+                ("2023-09-10", 2023, "AAA", ["a"]),
+                ("2024-09-08", 2024, "AAA", ["a"]),
+                ("2024-09-15", 2024, "AAA", ["a"]),
+                ("2024-09-22", 2024, "AAA", ["b"]),  # b's only 2024 game: the last
+                ("2025-09-07", 2025, "AAA", ["b"]),
+                ("2025-09-14", 2025, "AAA", ["b"]),
+            ]
+        )
+        got = build_continuity(s).set_index("game_id").loc["g5", "roster_carryover"]
+        assert got == pytest.approx(
+            1.0
+        ), f"b played for this team in 2024, so 2025's carryover is 1.0 -- got {got}"

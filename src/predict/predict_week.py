@@ -7,34 +7,52 @@ will happen on Sunday".
 
 How it differs from the model scripts. Those run walk-forward: refit for every
 historical week and score the result. This fits ONCE on every completed game
-and predicts forward. Same fit/predict functions, so a prediction here is
-produced by exactly the code the backtest measured -- no reimplementation that
-could drift from what was validated.
+and predicts forward, with the same fit/predict functions -- and, since
+2026-09-24, with its training rows in the same kickoff order the backtest uses.
+Before that the live fit received model_table.parquet in its stored order
+(grouped by home team), RidgeCV's time-series folds became team blocks, and the
+live Linear model was not the one the backtest had validated (up to 0.7 points
+apart). src/models/common.py::chronological, and tests/test_live_fit_order.py.
 
-Training window. Every completed game in model_table.parquet, which after
-`build_all` means everything through last week. tests/test_training_completeness.py
-asserts the harness never silently withholds recent games; this script asserts
-the same thing directly at runtime and refuses to run on stale data.
+WHICH models. config.yaml `live.models`, plus the rule-based baseline as a
+reference, plus the composite (`live.composite`): an equal-weight average of
+its members computed from their UNROUNDED forecasts. Names are checked against
+src/models/registry.py before anything is fitted.
+
+WHEN. A game is only forecast once its FINAL injury report is in the data
+(src/predict/injury_readiness.py): the Wednesday report for a Thursday game,
+Friday's for Sunday, Saturday's for Monday. Earlier, injury_impact -- the
+model's one leading indicator -- is near zero for everybody and the forecast is
+built on inputs the backtest never saw. So run it per slate: Thursday afternoon
+for the Thursday game, Sunday morning for the rest, re-pulling data each time
+(python -m src.weekly does both). --allow-unsettled-injuries overrides this, and
+every forecast records whether its report was final.
+
+Training window. Every completed game in model_table.parquet before the first
+game being forecast. The completeness guard below refuses to run if a finished
+game is missing from the table.
+
+Records. One parquet per week in data/predictions/, tracked in git. A game that
+has kicked off is never re-forecast; a game not forecast in this run keeps the
+forecast it already has. Each row carries its own generated_at, the models and
+composite members that produced it, and the code version.
 
 Market lines. spread_line and total_line are printed ALONGSIDE the predictions
-and are NEVER inputs. They are also converted into the score pair the market
+and are NEVER inputs. They are converted into the score pair the market
 implies, so the two can be read on the same scale:
 
     implied home = (total + spread) / 2
     implied away = (total - spread) / 2
 
-nflverse ships the CLOSING line, so a Wednesday prediction is being shown
-against a number that will keep moving until kickoff.
+Rounding. Stored and displayed to one decimal place. A tenth of a point is
+already far finer than the model can resolve -- typical error is over nine
+points.
 
-Rounding. Every predicted score is rounded to one decimal place before it is
-stored or displayed. A tenth of a point is already far finer than the model can
-actually resolve -- typical error is over nine points -- so the extra digits
-were noise dressed as precision.
-
-Run: python -m src.predict.predict_week                 # next unplayed week
-     python -m src.predict.predict_week --season 2026 --week 2
-     python -m src.predict.predict_week --week 2 --html   # + rebuild the page
-     python -m src.predict.predict_week --week 2 --json out.json
+Run: python -m src.predict.predict_week                  # next unplayed week
+     python -m src.predict.predict_week --season 2026 --week 3
+     python -m src.predict.predict_week --dry-run        # plan only: what is ready
+     python -m src.predict.predict_week --html           # + rebuild the ledger page
+     python -m src.predict.predict_week --allow-unsettled-injuries
 Output: data/predictions/<season>_wk<week>.parquet
         data/predictions/index.html   (with --html; see build_report.py)
 """
@@ -42,37 +60,27 @@ Output: data/predictions/<season>_wk<week>.parquet
 import argparse
 import json
 import sys
-from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
-from src.models.baseline import fit_baseline, predict_baseline
-from src.models.gaussian_process import fit_gp, predict_gp
-from src.models.linear import fit_linear, predict_linear
-from src.models.poisson_glm import fit_poisson, predict_poisson
+from src.config import live_settings
+from src.models import registry
+from src.models.common import chronological
+from src.predict import injury_readiness
+from src.provenance import git_state
+from src.schedule import kickoff_by_game
 
 MODEL_TABLE = Path("data/processed/model_table.parquet")
 SCHEDULES = Path("data/raw/schedules.parquet")
+INJURIES = Path("data/raw/injuries.parquet")
 
 # One decimal place. Typical error is over nine points, so anything finer is
 # noise wearing the costume of precision.
 DP = 1
 OUT_DIR = Path("data/predictions")
-
-# Everything but the stack, which is built from these.
-MODELS = {
-    "baseline": (fit_baseline, predict_baseline),
-    "linear": (fit_linear, predict_linear),
-    "poisson": (fit_poisson, predict_poisson),
-    "gp": (fit_gp, predict_gp),
-}
-# Weights for the combined model. Equal, deliberately: the walk-forward stack
-# fits ridge weights on out-of-fold predictions, which do not exist for a game
-# that has not been played. An equal average of the three is the honest
-# stand-in and is what the stack's weights land near anyway.
-STACK_MEMBERS = ["linear", "poisson", "gp"]
+REFERENCE_MODELS = ["baseline"]  # always fitted, never averaged
 
 
 def load_table() -> pd.DataFrame:
@@ -92,6 +100,19 @@ def pick_week(df: pd.DataFrame, season, week):
         row = upcoming.iloc[0]
         return int(row["season"]), int(row["week"])
     return int(season), int(week)
+
+
+def select_pending(target: pd.DataFrame, now: pd.Timestamp) -> pd.DataFrame:
+    """Games of the week that have not kicked off. A game with no known kickoff
+    is treated as pending -- refusing it would be worse than forecasting it."""
+    return target[target["kickoff"].isna() | (target["kickoff"] > now)]
+
+
+def training_cutoff(forecast: pd.DataFrame) -> pd.Timestamp:
+    """Train on games strictly before the first game being FORECAST -- not the
+    first game of the week. A Sunday run can use Thursday's result, a Monday
+    run the whole weekend's; pinned to the week, both would throw them away."""
+    return forecast["gameday"].min()
 
 
 def assert_training_is_current(train: pd.DataFrame, kickoff: pd.Timestamp) -> int:
@@ -132,7 +153,7 @@ def assert_training_is_current(train: pd.DataFrame, kickoff: pd.Timestamp) -> in
         )
 
     # (1) games that have already kicked off and still have no score. Scoped to
-    # a recent window: a game cancelled years ago (2021 BUF@CIN) never gets a
+    # a recent window: a game cancelled years ago (2022 BUF@CIN) never gets a
     # score and must not trip this forever.
     horizon = min(kickoff, pd.Timestamp.now().normalize()) - pd.Timedelta(days=1)
     recent = sched[sched["gameday"].between(horizon - pd.Timedelta(days=45), horizon)]
@@ -142,9 +163,7 @@ def assert_training_is_current(train: pd.DataFrame, kickoff: pd.Timestamp) -> in
             f"ERROR: {len(unscored)} games kicked off on or before "
             f"{horizon.date()} and still have no final score.\n"
             "The raw data is behind. Refresh, then rebuild:\n"
-            "  python src/ingest/pull_schedules.py\n"
-            "  python src/ingest/pull_pbp.py\n"
-            "  python src/ingest/pull_injuries.py\n"
+            "  python -m src.ingest.pull_all\n"
             "  python -m src.features.build_all"
         )
 
@@ -152,44 +171,26 @@ def assert_training_is_current(train: pd.DataFrame, kickoff: pd.Timestamp) -> in
 
 
 def kickoff_utc(game_ids) -> pd.Series:
-    """Actual kickoff instant per game, indexed by game_id.
-
-    gameday alone is a date, which is too coarse to decide whether a game has
-    started: a Thursday 20:15 ET kickoff and the Thursday morning prediction run
-    share a date. Same construction as build_injury_features.kickoff_times().
-    """
-    s = pd.read_parquet(SCHEDULES)
-    s = s[s["game_id"].isin(list(game_ids))]
-    ts = pd.to_datetime(
-        s["gameday"].astype(str) + " " + s["gametime"].fillna("13:00"), errors="coerce"
-    )
-    ts = ts.dt.tz_localize(
-        "US/Eastern", ambiguous="NaT", nonexistent="NaT"
-    ).dt.tz_convert("UTC")
-    return pd.Series(ts.to_numpy(), index=s["game_id"].to_numpy())
+    """Actual kickoff instant per game, indexed by game_id (see src/schedule.py)."""
+    return kickoff_by_game(pd.read_parquet(SCHEDULES), game_ids)
 
 
 def freeze_started_games(fresh: pd.DataFrame, path: Path, now) -> pd.DataFrame:
-    """Keep the prediction a game already had if it has kicked off.
+    """Merge this run's forecasts into the week's existing record.
 
-    Why this exists. predict_week writes ONE parquet per week and used to
-    overwrite it wholesale. That is fine while a week is run once, and actively
-    destructive once it is run several times across the week -- which is exactly
-    what predicting Thursday, Sunday and Monday games at their own lead times
-    requires. A Monday run would otherwise rewrite the Thursday game's forecast
-    three days AFTER it was played, leaving a file that claims to have predicted
-    games it had already seen the results of.
+    Two rules, both about never losing or rewriting a pre-kickoff forecast:
 
-    That is the one thing this project's records are supposed to guarantee. The
-    README puts it as "written once, before kickoff, and read back unchanged",
-    and the ledger's whole argument is that a parquet is a dated claim rather
-    than a retrospective one.
+      1. a game that has KICKED OFF keeps the forecast it had, verbatim,
+         including its original generated_at -- rewriting it afterwards would
+         leave a file claiming to have predicted a game whose result it had
+         already seen, the one thing these records exist to rule out;
+      2. a game NOT forecast in this run keeps the forecast it had. A run can
+         now deliberately skip games whose final injury report is not out yet,
+         and an earlier forecast of such a game is still a genuine pre-kickoff
+         record. (The first version kept only rule 1, so it would have dropped
+         those rows.)
 
-    So: a row whose kickoff has passed is carried over from the existing file
-    verbatim, including its original generated_at. Only games that have not yet
-    started are re-predicted. Re-running is therefore idempotent for the past
-    and refreshing for the future, and generated_at becomes per-game rather than
-    per-file -- each row records when THAT forecast was made.
+    Only games in `fresh` that have not started are replaced.
     """
     if not path.exists():
         return fresh
@@ -201,20 +202,24 @@ def freeze_started_games(fresh: pd.DataFrame, path: Path, now) -> pd.DataFrame:
         prior["kickoff"] = prior["game_id"].map(kickoff_utc(prior["game_id"]))
     prior["kickoff"] = pd.to_datetime(prior["kickoff"], utc=True)
 
-    started = prior[prior["kickoff"].notna() & (prior["kickoff"] <= now)]
-    if started.empty:
+    started = prior["kickoff"].notna() & (prior["kickoff"] <= now)
+    not_refreshed = ~prior["game_id"].isin(fresh["game_id"])
+    keep = prior[started | not_refreshed]
+    if keep.empty:
         return fresh
 
-    kept = fresh[~fresh["game_id"].isin(started["game_id"])]
+    kept = fresh[~fresh["game_id"].isin(keep["game_id"])]
+    n_started = int((started & prior["game_id"].isin(keep["game_id"])).sum())
     print(
-        f"  preserving {len(started)} already-started game(s) from the existing "
-        f"file; re-predicting {len(kept)}"
+        f"  preserving {n_started} already-started and "
+        f"{len(keep) - n_started} not-re-forecast game(s) from the existing file; "
+        f"writing {len(kept)} new forecast(s)"
     )
-    merged = pd.concat([started, kept], ignore_index=True)
+    merged = pd.concat([keep, kept], ignore_index=True)
     # Union the columns so a schema change between runs cannot drop a record.
     return merged.reindex(
         columns=list(dict.fromkeys(list(fresh.columns) + list(prior.columns)))
-    ).sort_values("gameday")
+    ).sort_values(["kickoff", "game_id"], na_position="last")
 
 
 def market_reference(game_ids) -> pd.DataFrame:
@@ -229,8 +234,47 @@ def market_reference(game_ids) -> pd.DataFrame:
     return s
 
 
-def main():
-    ap = argparse.ArgumentParser(description=__doc__)
+def rows_for(table: pd.DataFrame, game_ids) -> pd.DataFrame:
+    """The table's rows for exactly these games, in exactly this order -- a
+    model predicting from a different table must still line up row for row."""
+    idx = table.set_index("game_id")
+    missing = [g for g in game_ids if g not in idx.index]
+    if missing:
+        raise KeyError(f"{len(missing)} games absent from the table: {missing[:3]}")
+    return idx.loc[list(game_ids)].reset_index()
+
+
+def training_frame(table: pd.DataFrame, cutoff) -> pd.DataFrame:
+    """Completed games strictly before `cutoff`, in kickoff order."""
+    return chronological(
+        table[table["gameday"] < cutoff].dropna(subset=["home_score", "away_score"])
+    )
+
+
+def fit_and_predict(model_names, tables, trains, cutoff, forecast_ids, skip=()):
+    """Fit each model on its table's completed games before `cutoff` and
+    forecast `forecast_ids`. Returns {name: (home, away)} UNROUNDED. `tables`
+    and `trains` are caches keyed by table kind, filled in as needed."""
+    raw = {}
+    for name in model_names:
+        if name in skip:
+            continue
+        spec = registry.get(name)
+        if spec.table not in tables:
+            tables[spec.table] = registry.load_table(spec.table)
+        table = tables[spec.table]
+        if spec.table not in trains:
+            trains[spec.table] = training_frame(table, cutoff)
+        fit_fn, predict_fn = registry.load_fns(name)
+        print(f"  fitting {name}...", flush=True)
+        model = fit_fn(trains[spec.table])
+        h, a = predict_fn(model, rows_for(table, forecast_ids))
+        raw[name] = (np.asarray(h, dtype=float), np.asarray(a, dtype=float))
+    return raw
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--season", type=int, default=None)
     ap.add_argument("--week", type=int, default=None)
     ap.add_argument("--json", type=str, default=None, help="also write JSON here")
@@ -240,27 +284,44 @@ def main():
         help="also rebuild data/predictions/index.html (every week, graded)",
     )
     ap.add_argument(
-        "--skip-gp",
-        action="store_true",
-        help="omit the Gaussian Process (it takes ~25s to fit once)",
+        "--skip",
+        nargs="+",
+        default=[],
+        help="live models to leave out of this run (e.g. gp, which is the slow one)",
     )
-    args = ap.parse_args()
+    ap.add_argument("--skip-gp", action="store_true", help="same as --skip gp")
+    ap.add_argument(
+        "--allow-unsettled-injuries",
+        action="store_true",
+        help="also forecast games whose FINAL injury report is not in the data "
+        "yet; each such row is recorded with injury_report_final = False",
+    )
+    ap.add_argument(
+        "--dry-run", action="store_true", help="show what is ready; fit nothing"
+    )
+    args = ap.parse_args(argv)
+    skip = set(args.skip) | ({"gp"} if args.skip_gp else set())
+
+    live = live_settings()
+    comp = live["composite"]
+    model_names = REFERENCE_MODELS + [
+        m for m in live["models"] if m not in REFERENCE_MODELS
+    ]
+    if skip & set(comp["members"]):
+        print(
+            f"NOTE: skipping {sorted(skip & set(comp['members']))} leaves the "
+            f"composite with {len(set(comp['members']) - skip)} of its members"
+        )
 
     df = load_table()
     season, week = pick_week(df, args.season, args.week)
-
     target = df[(df["season"] == season) & (df["week"] == week)].copy()
     if target.empty:
         sys.exit(f"ERROR: no games found for season {season} week {week}.")
 
-    # Which games are still ahead of us. A week is predicted several times --
-    # Thursday for the Thursday night game, Sunday for the main slate, Monday
-    # for Monday night -- so "the games this run is actually forecasting" is
-    # usually a subset of the week.
     now = pd.Timestamp.now(tz="UTC")
     target["kickoff"] = target["game_id"].map(kickoff_utc(target["game_id"]))
-    pending = target[target["kickoff"].isna() | (target["kickoff"] > now)]
-
+    pending = select_pending(target, now)
     if pending.empty:
         sys.exit(
             f"ERROR: every game in season {season} week {week} has already "
@@ -270,107 +331,141 @@ def main():
             "  python -m src.predict.build_report"
         )
 
-    # The cutoff is the first PENDING kickoff, not the first game of the week.
-    #
-    # Those differ once a week is predicted more than once, and pinning to the
-    # week meant a Monday run refit on exactly the data the Thursday run had --
-    # 1976 games rather than 1991, throwing away that same week's Thursday and
-    # Sunday results while forecasting Monday night. Leakage-safe but needlessly
-    # blind, and this project treats "the model cannot see what it should" as
-    # the equal and opposite failure to leakage (tests/test_training_completeness.py).
-    kickoff = pending["gameday"].min()
-
-    # Strictly prior completed games -- the same rule the backtest enforces.
-    train = df[df["gameday"] < kickoff].dropna(subset=["home_score", "away_score"])
-    gap = assert_training_is_current(train, kickoff)
-
-    # Forecast only what has not started. Games that already kicked off keep the
-    # record they were given beforehand (see freeze_started_games); a game that
-    # started with no such record does not get one invented after the fact.
-    started_without_record = len(target) - len(pending)
-    target = pending
-
-    print(f"Predicting season {season}, week {week} -- {len(target)} game(s) pending")
-    if started_without_record:
-        print(
-            f"  {started_without_record} game(s) in this week have already kicked off "
-            "and are not being re-forecast"
+    if not INJURIES.exists():
+        sys.exit(
+            f"ERROR: {INJURIES} missing -- injury readiness cannot be judged.\n"
+            "Pull it first:  python -m src.ingest.pull_all"
         )
-    print(
-        f"  training on {len(train)} completed games through "
-        f"{train['gameday'].max().date()} ({gap} days before the first pending kickoff)"
+    ready = injury_readiness.assess(
+        pending, pd.read_parquet(INJURIES), injury_readiness.injuries_pulled_at()
     )
-    if target["home_score"].notna().any():
-        n = int(target["home_score"].notna().sum())
-        print(f"  NOTE: {n} of these games already have final scores")
+    pending = pending.merge(ready, on="game_id", how="left")
+    settled = pending[pending["injury_report_final"]]
+    unsettled = pending[~pending["injury_report_final"]]
 
-    out = target[
-        ["game_id", "season", "week", "gameday", "home_team", "away_team"]
+    print(f"Season {season}, week {week}: {len(pending)} game(s) not yet kicked off")
+    for _, r in pending.sort_values("kickoff").iterrows():
+        mark = "ready  " if r["injury_report_final"] else "WAITING"
+        print(f"  {mark} {r['away_team']:>3} @ {r['home_team']:<3}  {r['injury_note']}")
+
+    forecast = pending if args.allow_unsettled_injuries else settled
+    if len(unsettled) and not args.allow_unsettled_injuries:
+        print(
+            f"\n{len(unsettled)} game(s) held back until their final injury report "
+            "is in the data. Re-run after it is published (python -m src.weekly "
+            "pulls and predicts in one step), or pass --allow-unsettled-injuries "
+            "to forecast them now on an incomplete report."
+        )
+    if forecast.empty:
+        print("\nNothing to forecast yet. No file written.")
+        return 0
+    if args.dry_run:
+        print(f"\n--dry-run: would forecast {len(forecast)} game(s). Nothing written.")
+        return 0
+
+    cutoff = training_cutoff(forecast)
+    train = training_frame(df, cutoff)
+    gap = assert_training_is_current(train, cutoff)  # before any fitting
+    raw = fit_and_predict(
+        model_names,
+        {"model": df},
+        {"model": train},
+        cutoff,
+        list(forecast["game_id"]),
+        skip,
+    )
+
+    print(
+        f"\nForecasting {len(forecast)} game(s); trained on {len(train)} completed "
+        f"games through {train['gameday'].max().date()} ({gap} days before the first "
+        "forecast kickoff)"
+    )
+    out = forecast[
+        [
+            "game_id",
+            "season",
+            "week",
+            "gameday",
+            "home_team",
+            "away_team",
+            "injury_report_final",
+            "injury_report_due",
+            "injury_note",
+            "home_status_rows",
+            "away_status_rows",
+        ]
     ].copy()
-    for name in MODELS:
-        if name == "gp" and args.skip_gp:
-            continue
-        fit_fn, predict_fn = MODELS[name]
-        print(f"  fitting {name}...", flush=True)
-        model = fit_fn(train)
-        h, a = predict_fn(model, target)
+    for name, (h, a) in raw.items():
         out[f"{name}_home"] = np.round(h, DP)
         out[f"{name}_away"] = np.round(a, DP)
 
-    members = [m for m in STACK_MEMBERS if f"{m}_home" in out.columns]
+    # The composite is averaged BEFORE rounding. Averaging the rounded columns
+    # (the first version) stacked three rounding errors into it.
+    members = [m for m in comp["members"] if m in raw]
     if members:
-        out["combined_home"] = (
-            out[[f"{m}_home" for m in members]].mean(axis=1).round(DP)
+        out[f"{comp['name']}_home"] = np.round(
+            np.mean([raw[m][0] for m in members], 0), DP
         )
-        out["combined_away"] = (
-            out[[f"{m}_away" for m in members]].mean(axis=1).round(DP)
+        out[f"{comp['name']}_away"] = np.round(
+            np.mean([raw[m][1] for m in members], 0), DP
         )
 
-    for name in list(MODELS) + ["combined"]:
-        if f"{name}_home" in out.columns:
-            out[f"{name}_margin"] = (out[f"{name}_home"] - out[f"{name}_away"]).round(
-                DP
-            )
-            out[f"{name}_total"] = (out[f"{name}_home"] + out[f"{name}_away"]).round(DP)
+    for name in list(raw) + ([comp["name"]] if members else []):
+        out[f"{name}_margin"] = (out[f"{name}_home"] - out[f"{name}_away"]).round(DP)
+        out[f"{name}_total"] = (out[f"{name}_home"] + out[f"{name}_away"]).round(DP)
 
     out = out.merge(market_reference(out["game_id"]), on="game_id", how="left")
     out["kickoff"] = out["game_id"].map(kickoff_utc(out["game_id"]))
-    # Per-GAME, not per-file: a week may be predicted several times across the
-    # week, and each row should say when its own forecast was made.
+    # Per-GAME provenance: a week is written in several runs, so each row says
+    # when its own forecast was made, by which models, and from which code.
+    git = git_state()
     out["generated_at"] = now.isoformat()
     out["trained_through"] = str(train["gameday"].max().date())
     out["n_training_games"] = len(train)
+    out["models"] = ",".join(raw)
+    out["composite_members"] = ",".join(members)
+    out["code_version"] = git["sha"][:12] + ("+dirty" if git["dirty"] else "")
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     path = OUT_DIR / f"{season}_wk{week:02d}.parquet"
     out = freeze_started_games(out, path, now)
+    out = out.sort_values(["kickoff", "game_id"], na_position="last")
     out.to_parquet(path, index=False)
 
+    shown = [comp["name"]] + [m for m in live["models"] if m in raw]
     print(
-        f"\n{'MATCHUP':<22}{'COMBINED':>12}{'LINEAR':>12}{'POISSON':>12}{'GP':>12}{'MARKET':>12}"
+        f"\n{'KICKOFF (ET)':<19}{'MATCHUP':<13}"
+        + "".join(f"{m.upper():>12}" for m in shown)
+        + f"{'MARKET':>12}"
     )
-    print("-" * 82)
+    print("-" * (32 + 12 * (len(shown) + 1)))
     for _, r in out.iterrows():
-        match = f"{r['away_team']} @ {r['home_team']}"
-
-        def pair(pre):
-            hk, ak = f"{pre}_home", f"{pre}_away"
-            if hk not in r or pd.isna(r[hk]):
-                return f"{'--':>13}"
-            return f"{r[ak]:.1f}-{r[hk]:.1f}".rjust(13)
-
+        when = injury_readiness.et(r["kickoff"])[:-3] if pd.notna(r["kickoff"]) else "?"
+        cells = ""
+        for m in shown:
+            hk, ak = f"{m}_home", f"{m}_away"
+            cells += (
+                f"{r[ak]:.1f}-{r[hk]:.1f}".rjust(12)
+                if hk in r and pd.notna(r.get(hk))
+                else f"{'--':>12}"
+            )
         mk = (
-            f"{r['market_away']:.1f}-{r['market_home']:.1f}".rjust(13)
+            f"{r['market_away']:.1f}-{r['market_home']:.1f}".rjust(12)
             if pd.notna(r.get("market_home"))
-            else f"{'no line':>13}"
+            else f"{'no line':>12}"
         )
+        final = r.get("injury_report_final")
+        flag = "  *provisional" if pd.notna(final) and not bool(final) else ""
         print(
-            f"{match:<22}{pair('combined')}{pair('linear')}{pair('poisson')}"
-            f"{pair('gp')}{mk}"
+            f"{when:<19}{r['away_team'] + ' @ ' + r['home_team']:<13}{cells}{mk}{flag}"
         )
 
-    print(f"\nScores shown as away-home. Market column is the CLOSING line's implied")
-    print(f"score and is reference only -- it is never a model input.")
+    print("\nScores shown as away-home. Market column is the CLOSING line's implied")
+    print("score and is reference only -- it is never a model input.")
+    if (~out["injury_report_final"].fillna(True).astype(bool)).any():
+        print(
+            "*provisional: forecast before the game's final injury report was in the data."
+        )
     print(f"Saved to {path}")
 
     if args.html:
@@ -390,7 +485,8 @@ def main():
             + "\n"
         )
         print(f"JSON written to {args.json}")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

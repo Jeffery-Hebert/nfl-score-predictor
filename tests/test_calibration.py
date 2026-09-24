@@ -94,9 +94,10 @@ def test_normal_residuals_cover_close_to_nominal():
         assert abs(got - level) < 0.03, f"{level:.0%} interval covered {got:.1%}"
 
 
-def test_heavy_tails_under_cover_the_middle_intervals():
+def test_heavy_tails_break_nominal_coverage():
     """Heavy-tailed residuals inflate sigma, so a naive normal interval
-    over-covers the middle. Either way it is not nominal, which is the point."""
+    OVER-covers the middle. (This test used to be called
+    ..._under_cover_... -- the opposite of what it checks.)"""
     rng = np.random.default_rng(11)
     actual = rng.normal(23, 10, 20000)
     pred = actual + rng.standard_t(df=2, size=20000) * 3

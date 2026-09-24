@@ -144,8 +144,14 @@ def build_continuity(snaps: pd.DataFrame | None = None) -> pd.DataFrame:
             if len(prior_this_season) and last_season_squad:
                 total = 0.0
                 returning = 0.0
-                for lu in prior_this_season["lineup"]:
-                    for pid, share in lu.items():
+                # NOT `lu`: that name holds THIS game's line-up for the history
+                # update below. Reusing it here (the original code did) left it
+                # pointing at the previous game, so from the second season on
+                # each game entered the history one game late, week 1 counted
+                # twice and the season's last game never counted -- tenure and
+                # carryover were both wrong (fixed 2026-09-24; see the tests).
+                for prior_lu in prior_this_season["lineup"]:
+                    for pid, share in prior_lu.items():
                         total += share
                         if pid in last_season_squad:
                             returning += share

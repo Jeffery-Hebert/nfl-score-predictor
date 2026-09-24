@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from src.features.build_all import MANIFEST_PATH, STAGES
+from src.features.build_all import MANIFEST_PATH, STAGES, input_fingerprint
 
 # Reads built parquet from data/, which is gitignored -- excluded from CI.
 # Run locally after building the pipeline; see the marker note in pyproject.toml.
@@ -57,22 +57,34 @@ def test_every_output_exists(manifest):
 
 
 @pytest.mark.parametrize("stage", STAGES, ids=lambda s: s["module"].split(".")[-1])
-def test_output_is_newer_than_its_inputs(stage):
+def test_inputs_unchanged_since_the_build(stage, manifest):
     """The exact bug this suite was written for: a downstream table left stale
-    after an upstream one was rebuilt."""
-    out = Path(stage["output"])
-    assert out.exists(), f"{out} is missing. {REBUILD}"
-    out_mtime = out.stat().st_mtime
+    after an upstream one was rebuilt.
 
+    Judged by CONTENT: does every input still fingerprint to what the stage
+    read? This used to compare modification times, which failed after any
+    re-save of identical data and any edit to config.yaml (a comment, the live
+    model list) -- none of which changes a feature -- and a gate that fails for
+    nothing gets ignored the day it fails for something."""
+    record = next(
+        (r for r in manifest["stages"] if r["module"] == stage["module"]), None
+    )
+    assert record, f"{stage['module']} is not in the manifest. {REBUILD}"
+    recorded = {r["path"]: r.get("fingerprint") for r in record["inputs"]}
+    assert set(recorded) == set(stage["inputs"]), (
+        f"{stage['module']} was built before its inputs in STAGES changed "
+        f"(built from {sorted(recorded)}). {REBUILD}"
+    )
     for inp in stage["inputs"]:
-        p = Path(inp)
-        assert p.exists(), f"Input {inp} is missing."
-        if p.stat().st_mtime > out_mtime:
-            age = (p.stat().st_mtime - out_mtime) / 60
+        assert Path(inp).exists(), f"Input {inp} is missing."
+        assert recorded[inp], (
+            f"The manifest predates input fingerprints, so the freshness of "
+            f"{stage['output']} cannot be judged. {REBUILD}"
+        )
+        if input_fingerprint(inp) != recorded[inp]:
             pytest.fail(
-                f"STALE: {stage['output']} is {age:.0f} min older than its input "
-                f"{inp}, so it was built from a previous version of it. "
-                f"Anything derived from it is untrustworthy. {REBUILD}"
+                f"STALE: {inp} has changed since {stage['output']} was built "
+                f"from it. Anything derived from it is untrustworthy. {REBUILD}"
             )
 
 

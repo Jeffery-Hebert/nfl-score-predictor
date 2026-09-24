@@ -35,16 +35,25 @@ INJURY_COLS = ["injury_impact", "qb_out"]
 
 
 def build_table() -> pd.DataFrame:
+    """model_table plus qb_out.
+
+    injury_impact has been a production feature since 2026-09-15, so it is
+    already in model_table. This used to merge it in a second time, which gave
+    pandas two home_injury_impact columns, suffixed them _x/_y, and left the
+    experiment with no column of the expected name (KeyError). Only qb_out is
+    added now.
+    """
     mt = pd.read_parquet("data/processed/model_table.parquet")
     inj = pd.read_parquet("data/processed/injury_features.parquet")
-    home = inj[["game_id", "team"] + INJURY_COLS].rename(
-        columns={**{c: f"home_{c}" for c in INJURY_COLS}, "team": "home_team"}
-    )
-    away = inj[["game_id", "team"] + INJURY_COLS].rename(
-        columns={**{c: f"away_{c}" for c in INJURY_COLS}, "team": "away_team"}
-    )
-    df = mt.merge(home, on=["game_id", "home_team"], how="left")
-    return df.merge(away, on=["game_id", "away_team"], how="left")
+    for side in ("home", "away"):
+        mt = mt.merge(
+            inj[["game_id", "team", "qb_out"]].rename(
+                columns={"qb_out": f"{side}_qb_out", "team": f"{side}_team"}
+            ),
+            on=["game_id", f"{side}_team"],
+            how="left",
+        )
+    return mt
 
 
 def sided(cols):
@@ -111,11 +120,14 @@ def main():
     qb_games = int((df.home_qb_out.fillna(0) + df.away_qb_out.fillna(0) > 0).sum())
     print(f"  games with a starting QB out: {qb_games}\n")
 
+    # FEATURE_COLS now INCLUDES injury_impact, so "base" is production without
+    # it -- the comparison this experiment was written to make.
+    no_injury = [c for c in FEATURE_COLS if c not in sided(["injury_impact"])]
     variants = {
-        "base (production)": FEATURE_COLS,
-        "+injury_impact": FEATURE_COLS + sided(["injury_impact"]),
-        "+qb_out": FEATURE_COLS + sided(["qb_out"]),
-        "+both": FEATURE_COLS + sided(INJURY_COLS),
+        "base (no injury)": no_injury,
+        "+injury_impact (production)": FEATURE_COLS,
+        "+qb_out": no_injury + sided(["qb_out"]),
+        "+both": FEATURE_COLS + sided(["qb_out"]),
     }
 
     lin.fit_fn, lin.predict_fn = lin.fit_linear, lin.predict_linear
@@ -134,10 +146,10 @@ def main():
                 f"mean={(m['home_rmse'] + m['away_rmse']) / 2:.4f}"
             )
 
-        base = results["base (production)"]
+        base = results["base (no injury)"]
         print(f"\n  Paired bootstrap vs base ({N_BOOT} resamples over games)\n")
         for label, res in results.items():
-            if label == "base (production)":
+            if label == "base (no injury)":
                 continue
             mean, lo, hi = bootstrap(base, res)
             v = "noise" if lo <= 0 <= hi else ("BETTER" if hi < 0 else "WORSE")

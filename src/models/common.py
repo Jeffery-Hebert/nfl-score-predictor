@@ -104,6 +104,28 @@ FEATURE_COLS = (
     + GAME_FEATURE_COLS
 )
 
+
+def chronological(df):
+    """Rows in kickoff order, ties broken by game_id so the order is total.
+
+    Any estimator that selects a hyperparameter with TimeSeriesSplit (RidgeCV
+    here and in stacking.py) assumes its rows arrive oldest-first. The
+    walk-forward harness sorts before calling fit, but the live path in
+    predict_week.py never did, and model_table.parquet is ordered by HOME TEAM,
+    not by date. So the live fit's "time series" folds were really team blocks,
+    and RidgeCV chose alpha 562 where the same games in date order choose 100 --
+    moving Linear's live forecasts by up to 0.7 points. The backtest never ran
+    that configuration, so the live model was not the one that was validated.
+
+    Fit functions call this themselves rather than trusting the caller, so no
+    future caller can reintroduce the bug. game_id breaks same-day ties because
+    a dozen games share a Sunday and an unstable sort would let their order --
+    and so the fold boundaries -- differ between runs.
+    """
+    keys = ["gameday", "game_id"] if "game_id" in df.columns else ["gameday"]
+    return df.sort_values(keys, kind="mergesort")
+
+
 # C5: NOT a feature. went_to_ot is 0% populated before kickoff, so using it as
 # a model input would be target leakage. It exists only as a training-side
 # sample weight -- see ot_sample_weight() below.

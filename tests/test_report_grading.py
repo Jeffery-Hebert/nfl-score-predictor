@@ -376,3 +376,60 @@ class TestPerGameBackfillFlag:
         w = week_payload(path, pd.DataFrame(columns=["game_id"]), NO_KICKOFFS)
         assert w["games"][0]["backfilled"] is False
         assert w["n_backfilled"] == 0
+
+
+class TestModelsComeFromTheRecords:
+    """The page used to hard-code combined/linear/poisson/gp, so changing the
+    live models in config.yaml would have silently dropped the new ones from the
+    ledger. It now shows every <name>_home/<name>_away pair a week carries."""
+
+    def _week(self, tmp_path, extra=None):
+        row = {
+            "game_id": "2026_03_AAA_BBB",
+            "season": 2026,
+            "week": 3,
+            "gameday": pd.Timestamp("2026-09-27"),
+            "kickoff": pd.Timestamp("2026-09-27T17:00:00", tz="UTC"),
+            "home_team": "BBB",
+            "away_team": "AAA",
+            "combined_home": 24.0,
+            "combined_away": 20.0,
+            "catboost_home": 23.0,
+            "catboost_away": 21.0,
+            "baseline_home": 22.0,
+            "baseline_away": 21.0,
+            "market_home": 23.5,
+            "market_away": 20.5,
+            "generated_at": "2026-09-27T11:00:00+00:00",
+            "trained_through": "2026-09-21",
+            "n_training_games": 1992,
+        }
+        row.update(extra or {})
+        path = tmp_path / "2026_wk03.parquet"
+        pd.DataFrame([row]).to_parquet(path, index=False)
+        return path
+
+    def test_any_model_in_the_file_is_shown(self, tmp_path):
+        w = week_payload(
+            self._week(tmp_path), pd.DataFrame(columns=["game_id"]), NO_KICKOFFS
+        )
+        assert w["models"] == ["combined", "catboost"]
+        assert set(w["games"][0]["models"]) == {"combined", "catboost"}
+
+    def test_market_and_baseline_are_not_models_on_the_page(self, tmp_path):
+        w = week_payload(
+            self._week(tmp_path), pd.DataFrame(columns=["game_id"]), NO_KICKOFFS
+        )
+        assert "market" not in w["models"] and "baseline" not in w["models"]
+
+    def test_a_pre_injury_report_forecast_is_flagged(self, tmp_path):
+        path = self._week(tmp_path, {"injury_report_final": False})
+        w = week_payload(path, pd.DataFrame(columns=["game_id"]), NO_KICKOFFS)
+        assert w["games"][0]["provisional"] is True
+        assert w["n_provisional"] == 1
+
+    def test_a_week_written_before_the_flag_existed_is_not_smeared(self, tmp_path):
+        w = week_payload(
+            self._week(tmp_path), pd.DataFrame(columns=["game_id"]), NO_KICKOFFS
+        )
+        assert w["games"][0]["provisional"] is False

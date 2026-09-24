@@ -36,10 +36,14 @@ from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 from src.models.common import (
     FEATURE_COLS,
+    chronological,
     ot_sample_weight,
     recent_residual_offset,
 )
+from src.validate.backtest_io import save_predictions
 from src.validate.walk_forward import walk_forward_evaluate, score_predictions
+
+MODEL_TABLE = "data/processed/model_table.parquet"
 
 ALPHAS = np.logspace(-2, 4, 25)
 INNER_CV = 5  # chronological splits within the training fold
@@ -53,6 +57,8 @@ def _make_model():
 
 
 def fit_linear(train: pd.DataFrame) -> dict:
+    # RidgeCV's TimeSeriesSplit needs oldest-first rows -- see chronological().
+    train = chronological(train)
     X = train[FEATURE_COLS]
     means = X.mean()
     X_filled = X.fillna(means)
@@ -85,13 +91,13 @@ def predict_linear(model: dict, test: pd.DataFrame):
 
 
 def main():
-    df = pd.read_parquet("data/processed/model_table.parquet")
+    df = pd.read_parquet(MODEL_TABLE)
     results = walk_forward_evaluate(df, fit_linear, predict_linear, min_train_seasons=2)
     metrics = score_predictions(results)
     print("Linear Regression walk-forward results:")
     for k, v in metrics.items():
         print(f"  {k}: {v:.3f}" if isinstance(v, float) else f"  {k}: {v}")
-    results.to_parquet("data/processed/linear_predictions.parquet", index=False)
+    save_predictions(results, "linear", inputs=[MODEL_TABLE])
 
 
 if __name__ == "__main__":

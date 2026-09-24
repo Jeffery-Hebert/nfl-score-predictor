@@ -9,6 +9,9 @@
 # gitignored, so schema/table tests that read built parquet cannot run here.
 # Run those locally after building the pipeline:
 #     pytest tests/ -m requires_data -v
+# That scope includes tests/test_imports.py, which imports every module under
+# src/ -- the cheap net that would have caught the experiment scripts that sat
+# broken against the current feature set.
 #
 # torch is deliberately not installed here -- no test imports it, and the
 # CPU-wheel index URL breaks the install (see the note in requirements.txt).
@@ -44,6 +47,11 @@ jobs:
 
       - name: Leakage gates and unit tests
         run: pytest tests/ -m "not requires_data" -v
+
+      - name: Pipeline plans resolve (no data needed)
+        run: |
+          python -m src.features.build_all --dry-run
+          python -m src.models.run_all --list
 
       - name: Formatting (black is this project's standard)
         run: black --check .

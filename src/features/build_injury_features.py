@@ -97,14 +97,12 @@ QB_STARTER_SNAP_THRESHOLD = 0.50
 
 
 def kickoff_times(schedules: pd.DataFrame) -> pd.DataFrame:
-    """UTC kickoff per game, for the leakage filter and the as-of join."""
+    """UTC kickoff per game, for the leakage filter and the as-of join. The
+    construction is the shared one in src/schedule.py."""
+    from src.schedule import kickoff_utc
+
     s = schedules.copy()
-    ts = pd.to_datetime(
-        s["gameday"].astype(str) + " " + s["gametime"].fillna("13:00"), errors="coerce"
-    )
-    s["kickoff"] = ts.dt.tz_localize(
-        "US/Eastern", ambiguous="NaT", nonexistent="NaT"
-    ).dt.tz_convert("UTC")
+    s["kickoff"] = kickoff_utc(s)
     return s
 
 

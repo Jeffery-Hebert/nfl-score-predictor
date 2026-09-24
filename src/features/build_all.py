@@ -8,9 +8,15 @@ OLDER than the team_rolling_features.parquet it is derived from, which silently
 invalidated every model comparison made against it.
 
 This script makes the correct order executable, and writes a manifest so
-staleness is detectable afterwards instead of being invisible. See
-tests/test_pipeline_freshness.py, which fails if any output is older than an
-input or has been modified out of band.
+staleness is detectable afterwards instead of being invisible. The manifest
+records a content fingerprint of every input AS EACH STAGE READ IT, and of every
+output; tests/test_pipeline_freshness.py fails if any input has changed since
+its stage ran, or any output has been modified out of band.
+
+Why fingerprints, not modification times. The first version of that check
+compared mtimes, and fired on every re-save of identical data and on any edit
+to config.yaml -- a comment, the live model list -- although the builders read
+only its `training` block. A gate that cries wolf gets ignored.
 
 Run: python -m src.features.build_all
      python -m src.features.build_all --dry-run     # print the plan only
@@ -25,6 +31,8 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+
+from src.provenance import git_state, sha256
 
 CONFIG = "config.yaml"
 RAW_SCHEDULES = "data/raw/schedules.parquet"
@@ -105,31 +113,24 @@ STAGES = [
 ]
 
 
-def sha256(path: Path) -> str:
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(1024 * 1024), b""):
-            h.update(chunk)
-    return h.hexdigest()
-
-
 def file_stamp(path: str) -> dict:
     p = Path(path)
     st = p.stat()
     return {"path": path, "bytes": st.st_size, "mtime": st.st_mtime}
 
 
-def git_state() -> dict:
-    def run(*args):
-        return subprocess.run(
-            args, capture_output=True, text=True, check=False
-        ).stdout.strip()
+def input_fingerprint(path: str) -> str:
+    """A hash of what a stage READS from an input. For config.yaml that is only
+    the `training` block -- the one section any feature builder reads -- so
+    editing the rest of the file does not make every table stale."""
+    if Path(path).name == "config.yaml":
+        import yaml
 
-    return {
-        "sha": run("git", "rev-parse", "HEAD"),
-        "branch": run("git", "rev-parse", "--abbrev-ref", "HEAD"),
-        "dirty": bool(run("git", "status", "--porcelain")),
-    }
+        with open(path) as f:
+            training = (yaml.safe_load(f) or {}).get("training", {})
+        blob = json.dumps(training, sort_keys=True, default=str).encode()
+        return "training:" + hashlib.sha256(blob).hexdigest()
+    return sha256(path)
 
 
 def check_inputs_exist() -> list[str]:
@@ -163,10 +164,7 @@ def main():
     missing = check_inputs_exist()
     if missing:
         print(f"ERROR: missing raw inputs: {', '.join(missing)}")
-        print("Run the ingestion scripts first:")
-        print("  python src/ingest/pull_schedules.py")
-        print("  python src/ingest/pull_pbp.py")
-        print("  python src/ingest/pull_injuries.py")
+        print("Pull them first:  python -m src.ingest.pull_all")
         sys.exit(1)
 
     Path("data/processed").mkdir(parents=True, exist_ok=True)
@@ -176,6 +174,11 @@ def main():
     for i, stage in enumerate(STAGES, 1):
         module, output = stage["module"], stage["output"]
         print(f"\n[{i}/{len(STAGES)}] {module}")
+        # Fingerprinted BEFORE the stage runs: exactly what it is about to read.
+        inputs = [
+            file_stamp(p) | {"fingerprint": input_fingerprint(p)}
+            for p in stage["inputs"]
+        ]
         t0 = time.time()
         proc = subprocess.run([sys.executable, "-m", module], text=True)
         elapsed = time.time() - t0
@@ -195,7 +198,7 @@ def main():
             {
                 "module": module,
                 "seconds": round(elapsed, 2),
-                "inputs": [file_stamp(p) for p in stage["inputs"]],
+                "inputs": inputs,
                 "output": file_stamp(output) | {"sha256": sha256(out)},
             }
         )

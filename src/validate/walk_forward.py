@@ -43,7 +43,10 @@ def walk_forward_evaluate(
     min_train_seasons: burn-in period before folds start (rolling features need history)
     """
     df = df.dropna(subset=["home_score", "away_score"]).copy()
-    df = df.sort_values("gameday")
+    # Total order: kickoff date, then game_id. A plain sort on gameday is not
+    # stable across same-day games, and estimators that pick hyperparameters
+    # with TimeSeriesSplit see different fold boundaries if that order drifts.
+    df = df.sort_values(["gameday", "game_id"], kind="mergesort")
 
     seasons = sorted(df["season"].unique())
     test_seasons = seasons[min_train_seasons:]

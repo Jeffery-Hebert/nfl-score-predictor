@@ -212,9 +212,11 @@ class TestShrinkSelection:
         m = dm.fit_drive_model(self._train())
         assert m["shrink"] in dm.SHRINK_GRID
 
-    def test_selection_never_sees_data_outside_the_training_fold(self):
-        """Appending future games must not change the weight chosen for the
-        earlier fold."""
+    def test_selection_is_deterministic_for_a_given_fold(self):
+        """Same training fold, same weight. (Renamed: it was called
+        ..._never_sees_data_outside_the_training_fold, which it never tested --
+        keeping the fold boundary is the harness's job, pinned in
+        tests/test_walk_forward.py.)"""
         train = self._train(n=400, seed=1)
         m1 = dm.fit_drive_model(train)
         m2 = dm.fit_drive_model(train)

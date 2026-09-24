@@ -15,8 +15,19 @@ from src.models.common import BASE_FEATURE_COLS as FEATURE_COLS
 from src.models.common import INJURY_FEATURE_COLS, SPLIT_FEATURE_COLS
 
 
-def main():
-    rolling = pd.read_parquet("data/processed/team_rolling_features.parquet")
+def assemble(
+    rolling: pd.DataFrame,
+    inj: pd.DataFrame,
+    split: pd.DataFrame,
+    schedules: pd.DataFrame,
+) -> pd.DataFrame:
+    """The model table from its four inputs -- no file I/O.
+
+    Shared with the experiments that rebuild a feature table in memory
+    (tune_halflife.py, test_offseason_decay.py). They used to copy this
+    assembly by hand, froze at whatever the feature list was that day, and
+    crashed with a KeyError once injury and split features joined production.
+    """
 
     # C3/C4: game-level context, identical on both rows of a game, so it is
     # taken from the home side once rather than prefixed home_/away_.
@@ -34,7 +45,6 @@ def main():
 
     # Pregame availability. Keyed (game_id, team) like the rolling features but
     # built from the official injury report -- see build_injury_features.py.
-    inj = pd.read_parquet("data/processed/injury_features.parquet")
     inj_home = inj[["game_id", "team"] + INJURY_FEATURE_COLS].rename(
         columns={
             **{c: f"home_{c}" for c in INJURY_FEATURE_COLS},
@@ -53,7 +63,6 @@ def main():
     # Pass/rush efficiency split. Same grain and same join shape as the injury
     # features above; separate table because the estimator is different (volume
     # weighted and shrunk, not a plain EWM) -- see build_split_efficiency.py.
-    split = pd.read_parquet("data/processed/split_efficiency.parquet")
     split_home = split[["game_id", "team"] + SPLIT_FEATURE_COLS].rename(
         columns={
             **{c: f"home_{c}" for c in SPLIT_FEATURE_COLS},
@@ -69,7 +78,6 @@ def main():
     merged = merged.merge(split_home, on=["game_id", "home_team"], how="left")
     merged = merged.merge(split_away, on=["game_id", "away_team"], how="left")
 
-    schedules = pd.read_parquet("data/raw/schedules.parquet")
     # C5: went_to_ot is a TRAINING-side column, never a feature. It is 0%
     # populated before kickoff, so using it as an input would be target leakage
     # (OT games average 53.9 total points against 45.3). Models use it only to
@@ -88,6 +96,16 @@ def main():
     final["went_to_ot"] = final["overtime"].fillna(0).astype(int)
     final = final.drop(columns=["overtime"])
 
+    return final
+
+
+def main():
+    final = assemble(
+        pd.read_parquet("data/processed/team_rolling_features.parquet"),
+        pd.read_parquet("data/processed/injury_features.parquet"),
+        pd.read_parquet("data/processed/split_efficiency.parquet"),
+        pd.read_parquet("data/raw/schedules.parquet"),
+    )
     out_path = Path("data/processed/model_table.parquet")
     final.to_parquet(out_path, index=False)
 

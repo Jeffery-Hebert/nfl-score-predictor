@@ -5,7 +5,9 @@ The drive-outcome model, rebuilt. A structural, explicitly RELATIONAL predictor:
 it matches one team's offensive drive-outcome distribution against the specific
 defence it will face, converts that to points, and multiplies by possessions.
 
-EXPERIMENTAL. Writes nothing; production is untouched.
+EXPERIMENTAL. Production is untouched. main() writes its walk-forward result to
+data/processed/drivev2_predictions.parquet (with a provenance sidecar) so the
+scoreboard and model report can compare it; nothing else is written.
 
 --------------------------------------------------------------- what v1 did
 
@@ -442,8 +444,9 @@ def main():
     print(
         "\n  for reference: monte_carlo v1 = 9.608, baseline = 9.458, poisson = 9.367"
     )
-    res.to_parquet("data/processed/drivev2_predictions.parquet", index=False)
-    print("  saved -> data/processed/drivev2_predictions.parquet")
+    from src.validate.backtest_io import save_predictions
+
+    save_predictions(res, "drivev2", inputs=[DRIVE_TABLE, SCHEDULES])
 
 
 if __name__ == "__main__":

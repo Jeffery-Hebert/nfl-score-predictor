@@ -11,7 +11,10 @@ from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import RBF, WhiteKernel, ConstantKernel
 from sklearn.preprocessing import StandardScaler
 from src.models.common import FEATURE_COLS, recent_residual_offset
+from src.validate.backtest_io import save_predictions
 from src.validate.walk_forward import walk_forward_evaluate, score_predictions
+
+MODEL_TABLE = "data/processed/model_table.parquet"
 
 KERNEL = ConstantKernel(1.0) * RBF(length_scale=1.0) + WhiteKernel(noise_level=1.0)
 
@@ -56,13 +59,13 @@ def predict_gp(model: dict, test: pd.DataFrame):
 
 
 def main():
-    df = pd.read_parquet("data/processed/model_table.parquet")
+    df = pd.read_parquet(MODEL_TABLE)
     results = walk_forward_evaluate(df, fit_gp, predict_gp, min_train_seasons=2)
     metrics = score_predictions(results)
     print("Gaussian Process walk-forward results:")
     for k, v in metrics.items():
         print(f"  {k}: {v:.3f}" if isinstance(v, float) else f"  {k}: {v}")
-    results.to_parquet("data/processed/gp_predictions.parquet", index=False)
+    save_predictions(results, "gp", inputs=[MODEL_TABLE])
 
 
 if __name__ == "__main__":

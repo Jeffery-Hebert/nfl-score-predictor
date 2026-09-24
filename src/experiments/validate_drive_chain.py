@@ -53,6 +53,7 @@ from src.validate.calibration import (
     reliability_table,
     rmse,
 )
+from src.validate.backtest_io import save_predictions
 from src.validate.walk_forward import score_predictions, walk_forward_evaluate
 
 N_TRIALS = 4000
@@ -175,7 +176,7 @@ def main():
     df = dc.load_table()
     rec = DistributionRecorder()
     res = walk_forward_evaluate(df, rec.fit, rec.predict, min_train_seasons=2)
-    res.to_parquet(OUT_PRED, index=False)
+    save_predictions(res, "drivechain", inputs=[dc.DRIVE_TABLE, dc.SCHEDULES, dc.PBP])
 
     order = {g: i for i, g in enumerate(rec.game_ids)}
     idx = res["game_id"].map(order).to_numpy()

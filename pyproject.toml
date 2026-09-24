@@ -1,5 +1,6 @@
 [tool.pytest.ini_options]
 pythonpath = ["."]
 markers = [
+    "backtest_artifacts: test reads data/processed/*_predictions.parquet (walk-forward backtest outputs). These go stale -- by design -- whenever new results arrive and until python -m src.models.run_all is re-run, so the weekly run (python -m src.weekly) selects `requires_data and not backtest_artifacts` rather than asking anyone to ignore failures.",
     "requires_data: test reads files under data/ (which is gitignored). Excluded in CI via `-m 'not requires_data'`; run locally after building the pipeline. A test that touches data/ WITHOUT this marker passes locally and fails only in CI -- that went unnoticed for four commits once. Before pushing, verify the CI scope actually runs without data/: `mv data /tmp/d && pytest tests/ -m 'not requires_data' -q; mv /tmp/d data`. Note it applies to data/raw/ too, not just built parquet: code paths like predict_week.kickoff_utc() read schedules.parquet, so a test exercising them must supply its own file via monkeypatch rather than relying on the real one.",
 ]

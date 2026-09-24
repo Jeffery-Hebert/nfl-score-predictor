@@ -41,8 +41,10 @@ def test_no_duplicate_game_ids(df):
 
 
 def test_season_range(df):
-    assert df["season"].min() >= 2019, "Data includes seasons before 2019 cutoff"
-    assert df["season"].max() <= 2026, "Data includes unexpected future seasons"
+    from src.ingest.seasons import SEASON_START, current_season
+
+    assert df["season"].min() >= SEASON_START, "Data includes seasons before the start"
+    assert df["season"].max() <= current_season(), "Data includes future seasons"
 
 
 def test_completed_games_have_valid_scores(df):
@@ -60,9 +62,18 @@ def test_missingness_on_key_fields(df):
 
 
 def test_incomplete_games_are_future_or_current_week(df):
-    """Games missing a score should only be upcoming games, not historical gaps."""
-    incomplete = df[df["home_score"].isna()]
-    if len(incomplete) > 0:
-        assert (
-            incomplete["season"].max() >= 2026
-        ), "Found incomplete games in a season that should be fully finished"
+    """Games missing a score should only be upcoming games, not historical gaps.
+
+    Checks EVERY unscored game. The old version checked only that the latest
+    unscored game was in the current season, which any single current-season
+    game satisfied no matter how many past games were missing.
+    """
+    from src.ingest.pull_all import KNOWN_UNFINISHED
+    from src.ingest.seasons import current_season
+
+    incomplete = df[df["home_score"].isna() & ~df["game_id"].isin(KNOWN_UNFINISHED)]
+    stale = incomplete[incomplete["season"] < current_season()]
+    assert stale.empty, (
+        f"{len(stale)} past-season games have no score "
+        f"(e.g. {', '.join(stale['game_id'].head(3))})"
+    )

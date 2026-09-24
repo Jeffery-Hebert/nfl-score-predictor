@@ -11,6 +11,8 @@ import pandas as pd
 from pathlib import Path
 import yaml
 
+from src.features.build_team_game_stats import TEAM_CODE_MAP
+
 DRIVE_STAT_COLS = [
     "off_touchdown_rate",
     "off_field_goal_rate",
@@ -62,6 +64,38 @@ def add_pregame_rolling_drive_features(
     return group
 
 
+def upcoming_team_games(played: pd.DataFrame) -> pd.DataFrame:
+    """Team-game rows for scheduled games that have not been played yet.
+
+    drive_stats.parquet comes from play-by-play, so it only has games that
+    already happened -- and without a row for next week's game there is nowhere
+    to attach a pregame feature, so no drive model could forecast an unplayed
+    game at all. build_team_game_stats avoids this by starting from the
+    schedule; this does the same for the drive features.
+
+    Only games AFTER the last played game are added. A NaN row in the MIDDLE of
+    a team's history (the cancelled 2022 BUF@CIN game) would change how pandas'
+    ignore_na EWM decays the next observation, altering historical features;
+    appending strictly after the history cannot touch any row before it.
+    Stats are NaN, so these rows receive a pregame value and contribute nothing.
+    """
+    sched = pd.read_parquet("data/raw/schedules.parquet")
+    sched["gameday"] = pd.to_datetime(sched["gameday"])
+    last_played = played["gameday"].max()
+    future = sched[(sched["gameday"] > last_played) & sched["home_score"].isna()]
+    rows = pd.concat(
+        [
+            future[["game_id", "season", "week", "gameday", side]].rename(
+                columns={side: "team"}
+            )
+            for side in ("home_team", "away_team")
+        ],
+        ignore_index=True,
+    )
+    rows["team"] = rows["team"].replace(TEAM_CODE_MAP)
+    return rows
+
+
 def main():
     cfg = load_config()
     halflife_days = cfg["training"]["recency_half_life_weeks"] * 7
@@ -77,6 +111,7 @@ def main():
     schedules["gameday"] = pd.to_datetime(schedules["gameday"])
 
     df = drive_stats.merge(schedules, on="game_id", how="inner")
+    df = pd.concat([df, upcoming_team_games(df)], ignore_index=True)
 
     pieces = []
     for team, group in df.groupby("team"):

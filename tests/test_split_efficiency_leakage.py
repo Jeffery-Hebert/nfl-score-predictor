@@ -343,7 +343,6 @@ def test_shrinkage_actually_compresses_the_spread():
     )
 
 
-@pytest.mark.requires_data
 def test_defence_is_shrunk_harder_than_offence():
     """Not cosmetic. Defensive performance is measurably less persistent
     (split-half r 0.33 against 0.53), so its estimates must be pulled toward the

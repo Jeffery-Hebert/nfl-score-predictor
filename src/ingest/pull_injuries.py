@@ -19,30 +19,41 @@ is how you tell them apart.
 The two sources use different player ids -- injuries key on gsis_id, snap
 counts on pfr_player_id -- so load_players supplies the crosswalk.
 
-Run: python src/ingest/pull_injuries.py
+Run: python -m src.ingest.pull_injuries   (or all three: python -m src.ingest.pull_all)
+
+TIMING: injury statuses are only final shortly before each game (see
+src/predict/injury_readiness.py). Pull again right before forecasting.
 Output: data/raw/injuries.parquet
         data/raw/snap_counts.parquet
         data/raw/player_ids.parquet
 """
 
-import nflreadpy as nfl
+import sys
 from pathlib import Path
 
-SEASON_START = 2019
-SEASON_END = 2026
+if __package__ in (None, ""):  # run as a file: python src/ingest/<this>.py
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+import nflreadpy as nfl  # noqa: E402
+
+from src.ingest.manifest import record_pull  # noqa: E402
+from src.ingest.seasons import load_seasons  # noqa: E402
+from src.ingest.seasons import seasons as seasons_to_pull  # noqa: E402
 
 
 def main():
-    seasons = list(range(SEASON_START, SEASON_END + 1))
+    seasons = seasons_to_pull()
     out_dir = Path("data/raw")
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    injuries = nfl.load_injuries(seasons=seasons).to_pandas()
+    injuries = load_seasons(nfl.load_injuries, seasons).to_pandas()
     injuries.to_parquet(out_dir / "injuries.parquet", index=False)
+    record_pull("injuries", out_dir / "injuries.parquet", injuries, seasons)
     print(f"Pulled {len(injuries)} injury-report rows, {seasons[0]}-{seasons[-1]}")
 
-    snaps = nfl.load_snap_counts(seasons=seasons).to_pandas()
+    snaps = load_seasons(nfl.load_snap_counts, seasons).to_pandas()
     snaps.to_parquet(out_dir / "snap_counts.parquet", index=False)
+    record_pull("snap_counts", out_dir / "snap_counts.parquet", snaps, seasons)
     print(f"Pulled {len(snaps)} snap-count rows")
 
     players = nfl.load_players().to_pandas()
@@ -52,6 +63,7 @@ def main():
         if c in players.columns
     ]
     players[keep].to_parquet(out_dir / "player_ids.parquet", index=False)
+    record_pull("player_ids", out_dir / "player_ids.parquet", players[keep], seasons)
     print(f"Pulled {len(players)} player-id crosswalk rows ({keep})")
 
     print("Saved to data/raw/{injuries,snap_counts,player_ids}.parquet")

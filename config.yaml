@@ -1,8 +1,11 @@
-# Only ONE key in this file is read by code:
+# Keys READ BY CODE are marked READ BY CODE below:
 #   training.recency_half_life_weeks  (src/features/build_*_rolling_features.py,
-#                                      src/features/build_adjusted_ratings.py)
-# Everything else is documentation of the system's current shape. Changing it
-# does not change behavior -- update the referenced source file instead.
+#                                      src/features/build_adjusted_ratings.py,
+#                                      src/features/build_split_efficiency.py)
+#   live.*                            (src/predict/predict_week.py,
+#                                      src/models/composite.py, src/config.py)
+# Everything else documents the system's current shape. Changing it does not
+# change behaviour -- update the referenced source file instead.
 
 project:
   name: nfl-score-predictor
@@ -11,34 +14,57 @@ project:
 data:
   source: nflreadpy
   season_start: 2019
-  season_end: 2026
-  # NOTE: not updated automatically. Hardcoded as SEASON_START/SEASON_END in
-  # src/ingest/pull_pbp.py and src/ingest/pull_schedules.py -- edit both by hand.
+  # The last season pulled is resolved at run time (src/ingest/seasons.py):
+  # the new season is included from March 15, when nflverse rolls over, and a
+  # season with no data published yet is skipped automatically. It no longer
+  # has to be edited by hand each year.
 
 training:
   # READ BY CODE. Tuned 2026-09-14 via src/experiments/tune_halflife.py:
   # swept [4, 8, 12, 17, 26, 39, 52] weeks on baseline/Linear/Poisson. The
   # curve is unimodal and 17 is the minimum for all three
   # (12 -> 9.4039, 17 -> 9.3921, 26 -> 9.4138 mean RMSE on Poisson).
-  # The original value was a guess that happened to be right; it is now measured.
+  # Re-swept 2026-09-18 with the full feature set (test_recency_plans.py): 17
+  # still wins.
   recency_half_life_weeks: 17
-  # Retrain cadence below is documentation only; the real schedule is the cron
-  # in .github/workflows/weekly.yml.
-  retrain_day: wednesday
-  retrain_time_local: "17:00"
-  timezone: America/Chicago
 
-# Models currently evaluated and feeding the stack.
-models:
-  - linear_regression      # src/models/linear.py
-  - poisson_glm            # src/models/poisson_glm.py
-  - gaussian_process       # src/models/gaussian_process.py
+# When to run. NOT read by code -- the rule lives in
+# src/predict/injury_readiness.py and README section 5.
+#
+# The injury report is the model's only leading indicator, and it is only
+# FINAL (Out / Doubtful / Questionable) shortly before each game:
+#   Thursday game -> Wednesday's report     Sunday game -> Friday's report
+#   Saturday game -> Thursday's report      Monday game -> Saturday's report
+# A forecast made earlier sees an almost empty injury report (8 of 259 rows on
+# the Thursday of 2026 week 3) and silently treats every team as healthy. So a
+# week is forecast in slates, each after its own final report:
+#   Thursday afternoon  -> the Thursday game
+#   Sunday morning      -> Sunday and Monday games
+# predict_week refuses to forecast a game whose final report is not in the
+# data yet, unless --allow-unsettled-injuries is passed.
+schedule:
+  thursday_slate: "Thursday ~13:00 America/Chicago"
+  sunday_slate: "Sunday ~06:00 America/Chicago"
 
-# Rule-based reference every model above must beat out-of-sample to be trusted.
+# READ BY CODE. The models fitted for every live forecast, and the composite
+# built from them. Names must exist in src/models/registry.py and be able to
+# forecast an unplayed game (predict_week checks both).
+#
+# Selected 2026-09-24 from the full re-benchmark of every model through
+# 2026 week 2 -- see README section 9 for the numbers.
+live:
+  models: [poisson, gp, linear]
+  composite:
+    name: combined              # column prefix in data/predictions/*.parquet
+    members: [poisson, gp, linear]
+    method: mean                # equal weights; see src/models/composite.py
+
+# Rule-based reference every model must beat out-of-sample to be trusted. Also
+# fitted on every live forecast, for comparison.
 baseline: src/models/baseline.py   # also contains the trivial league-average floor
 
 # Built, evaluated, and shelved for showing no measurable out-of-sample gain.
-# Retained in src/models/unused/ for research/diagnostics, not part of the stack.
+# Retained in src/models/unused/ and re-benchmarked by src/models/run_all.py.
 shelved_models:
   - random_forest
   - xgboost
@@ -51,7 +77,7 @@ shelved_models:
   - monte_carlo
 
 meta_model:
-  # src/models/stacking.py
-  type: ridge_stacker              # Ridge(alpha=1.0) on StandardScaler'd base predictions
+  # src/models/stacking.py -- research only, not used live.
+  type: ridge_stacker              # RidgeCV (alpha chosen in-fold by TimeSeriesSplit)
   base_models: [linear, poisson, gp]   # must match BASE_MODELS in stacking.py
   validation: walk_forward         # walk_forward_evaluate(min_train_seasons=1)

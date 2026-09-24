@@ -15,7 +15,10 @@ Reports per model:
   calibration slope and bias (see calibration.py -- RMSE cannot see compression)
   correctness NaNs, negative or implausible scores, degenerate constant output,
               game coverage, and staleness against model_table.parquet
-  vs baseline  paired bootstrap over games, the project's significance bar
+  vs baseline  paired bootstrap, resampling whole WEEKS (games in one week share
+              a fitted model and a scoring environment, so resampling single
+              games -- what this used to do -- gives intervals that are too
+              narrow)
 
 Run: python -m src.validate.model_scoreboard
      python -m src.validate.model_scoreboard --against baseline --common-games
@@ -31,16 +34,21 @@ import pandas as pd
 from src.validate.calibration import bias, calibration_slope_intercept, rmse
 
 PRED_DIR = Path("data/processed")
-MODEL_TABLE = PRED_DIR / "model_table.parquet"
 PLAUSIBLE_MAX = 70.0
 N_BOOT = 5000
 SEED = 42
 
 
 def discover() -> dict[str, Path]:
+    """Registered models with a saved backtest. Unregistered leftovers in
+    data/processed/ (old one-off experiment outputs) are ignored rather than
+    ranked alongside current models."""
+    from src.models import registry
+
     return {
-        p.name.replace("_predictions.parquet", ""): p
-        for p in sorted(PRED_DIR.glob("*_predictions.parquet"))
+        n: PRED_DIR / f"{n}_predictions.parquet"
+        for n in registry.names()
+        if (PRED_DIR / f"{n}_predictions.parquet").exists()
     }
 
 
@@ -63,9 +71,13 @@ def correctness_checks(name: str, path: Path, df: pd.DataFrame) -> list[str]:
         problems.append(f"{df['game_id'].duplicated().sum()} duplicate game_ids")
     if df[["home_score", "away_score"]].isna().any().any():
         problems.append("scored against rows with no final score")
-    if MODEL_TABLE.exists() and path.stat().st_mtime < MODEL_TABLE.stat().st_mtime:
-        age = (MODEL_TABLE.stat().st_mtime - path.stat().st_mtime) / 3600
-        problems.append(f"STALE: {age:.1f}h older than model_table.parquet")
+    # Staleness by CONTENT: the played rows this backtest read must still hash
+    # the same (src/validate/backtest_io.py). This used to compare file mtimes,
+    # which cried wolf after every rebuild.
+    from src.validate.backtest_io import stale_inputs
+
+    for issue in stale_inputs(name):
+        problems.append(f"STALE: {issue}")
     return problems
 
 
@@ -88,30 +100,30 @@ def metrics(df: pd.DataFrame) -> dict:
 
 
 def bootstrap_vs(base: pd.DataFrame, cand: pd.DataFrame):
-    """Paired bootstrap over games, pooled home+away. Negative delta = better."""
-    m = base.merge(cand, on="game_id", suffixes=("_b", "_c"))
+    """Paired bootstrap, resampling whole weeks, pooled home+away errors.
+    Returns (delta, lo, hi); negative delta = the candidate is better."""
+    from src.validate.model_report import BlockBootstrap
+
+    m = base.merge(cand, on=["game_id", "season", "week"], suffixes=("_b", "_c"))
     if m.empty:
         return None
-    eb = np.stack(
+    eb = np.concatenate(
         [
             (m.home_pred_b - m.home_score_b).to_numpy(float),
             (m.away_pred_b - m.away_score_b).to_numpy(float),
         ]
     )
-    ec = np.stack(
+    ec = np.concatenate(
         [
             (m.home_pred_c - m.home_score_c).to_numpy(float),
             (m.away_pred_c - m.away_score_c).to_numpy(float),
         ]
     )
-    rng = np.random.default_rng(SEED)
-    n = eb.shape[1]
-    d = np.empty(N_BOOT)
-    for i in range(N_BOOT):
-        k = rng.integers(0, n, n)
-        d[i] = np.sqrt((ec[:, k] ** 2).mean()) - np.sqrt((eb[:, k] ** 2).mean())
-    lo, hi = np.percentile(d, [2.5, 97.5])
-    return float(d.mean()), float(lo), float(hi)
+    block = (m["season"] * 100 + m["week"]).to_numpy()
+    d, lo, hi, _ = BlockBootstrap(
+        np.concatenate([block, block]), N_BOOT, SEED
+    ).rmse_delta(ec, eb)
+    return d, lo, hi
 
 
 def main(argv=None):
@@ -185,7 +197,7 @@ def main(argv=None):
     ref = args.against
     if ref in frames:
         print(
-            f"\nSignificance vs {ref} (paired bootstrap over games, pooled home+away)"
+            f"\nSignificance vs {ref} (paired bootstrap resampling WEEKS, pooled home+away)"
         )
         print("  negative delta = better than the reference\n")
         for n in table["model"]:

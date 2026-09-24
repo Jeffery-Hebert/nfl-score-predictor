@@ -220,13 +220,19 @@ td.final{font-weight:600}
     prediction landed from the final score. The project's headline number elsewhere is
     RMSE, which squares the misses first &#8212; useful over 1,400 games, misleading over
     sixteen, where one blowout would swamp the other fifteen results.</p>
+    <p><b>Pre-injury-report</b> marks a forecast written before that game's final injury
+    report (Wednesday for Thursday games, Friday for Sunday, Saturday for Monday) was in
+    the data. The model's injury signal was mostly missing, so treat it as provisional.</p>
     <p>Regenerate after new results land: <code>python -m src.predict.build_report</code></p>
   </div>
 </div>
 
 <script>
 const DATA = __DATA__;
-const MODELS = [["combined","Combined"],["linear","Linear"],["poisson","Poisson"],["gp","Gauss. Proc."]];
+// Which models to show comes from the records (build_report.py), so changing
+// the live models in config.yaml changes the page without touching this file.
+const MODELS = DATA.models;
+const COMP = DATA.composite;
 const fmt = n => n.toFixed(1);
 const signed = n => (n > 0 ? "+" : n < 0 ? "−" : "±") + Math.abs(n).toFixed(1);
 const slug = w => `${w.season}-w${String(w.week).padStart(2,"0")}`;
@@ -272,7 +278,7 @@ function drawRail(){
       rec.classList.add("pend");
       rec.textContent = `${w.games.length} upcoming`;
     } else {
-      const s = w.summary.combined;
+      const s = w.summary[COMP];
       rec.textContent = s ? `${s.winners}–${s.n - s.winners} · ${s.mae.toFixed(2)} MAE` : `${w.n_graded} final`;
     }
     b.append(label, rec);
@@ -312,7 +318,7 @@ function drawLede(w){
       `through ${w.trained_through} — nothing from this week or later. Once the scores are in, ` +
       `re-run the report and this page grades itself.`));
   } else {
-    const s = w.summary.combined;
+    const s = w.summary[COMP];
     b.textContent = `${w.n_graded} of ${w.games.length} games are final.`;
     el.append(b, document.createTextNode(
       s ? ` The combined model called ${s.winners} of ${s.n} winners and missed each score by ` +
@@ -412,6 +418,7 @@ function drawBody(w){
     const dt = document.createElement("span");
     dt.className = "dt"; dt.textContent = kickLabel(g);
     if (g.backfilled) dt.append(lateTag());
+    if (g.provisional) dt.append(provisionalTag());
     m.append(dt);
     tr.append(m);
 
@@ -439,7 +446,7 @@ function careerLines(){
   // from the stored grades, never recomputed from a model.
   let n = 0, won = 0, pts = 0, back = 0;
   DATA.weeks.forEach(w => {
-    const s = w.summary.combined;
+    const s = w.summary[COMP];
     if (!s) return;
     n += s.n; won += s.winners; pts += s.mae * s.n * 2;
     // Count backfilled GAMES, not whole weeks. A week with one late Thursday
@@ -475,6 +482,17 @@ function lateTag(){
   return t;
 }
 
+// A forecast written before the game's FINAL injury report was in the data --
+// injury_impact, the model's one leading indicator, was mostly missing.
+function provisionalTag(){
+  const t = document.createElement("span");
+  t.className = "late";
+  t.textContent = "pre-injury-report";
+  t.title = "Forecast before this game's final injury report was published; " +
+            "injured players were not yet accounted for";
+  return t;
+}
+
 function gradeSpan(gr){
   const s = document.createElement("span");
   s.className = "err " + (gr.winner_correct ? "hit" : "miss");
@@ -491,6 +509,7 @@ function drawCards(w){
     const when = document.createElement("div");
     when.className = "when"; when.textContent = kickLabel(g);
     if (g.backfilled) when.append(lateTag());
+    if (g.provisional) when.append(provisionalTag());
     c.append(h, when);
 
     if (g.actual){

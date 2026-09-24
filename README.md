@@ -24,14 +24,15 @@ just "who wins."
 The headline number is **RMSE** (root mean squared error). Think of it as
 "typically how many points off are we, with big misses punished extra."
 
-Current accuracy, measured across 1,440 real games from 2021–2026:
+Current accuracy, measured across 1,456 real games from 2021 through 2026 Week 2
+(re-benchmarked 2026-09-24):
 
 | What | Typical error per team's score |
 |---|---|
-| Always guess the league average | ~9.93 points |
-| Simple rule, no machine learning | 9.46 points |
-| **Our best model (Poisson)** | **9.37 points** |
-| Las Vegas betting markets | ~9.10 points |
+| Always guess the league average | 9.96 points |
+| Simple rule, no machine learning | 9.48 points |
+| **Our best model (the composite: Poisson + GP + Ridge, averaged)** | **9.38 points** |
+| Las Vegas closing line | 9.13 points |
 
 Two honest takeaways:
 
@@ -216,65 +217,103 @@ than no test, because it creates false confidence.
 
 ## 5. Running it
 
-Requires Python 3.12.
+Requires Python 3.12. Run everything from the repo root.
 
 ```bash
 pip install -r requirements.txt
 ```
 
-**Step 1 — download the data** (slow the first time; play-by-play is ~130 MB):
+### The weekly run — one command
 
 ```bash
-python src/ingest/pull_schedules.py
-python src/ingest/pull_pbp.py
-python src/ingest/pull_injuries.py
+python -m src.weekly
 ```
 
-**Step 2 — build all the features** (about 50 seconds, all 11 stages in order):
+That does, in order, stopping at the first failure with the fix spelled out:
+
+1. **pull** fresh schedules, play-by-play, injuries and snap counts from nflverse,
+   and check they are complete and agree with each other (every finished game has a
+   score, every scored game has plays, and play-by-play's final score matches the
+   schedule's);
+2. **build** every feature table in dependency order (~50 seconds);
+3. **check** the built data (leakage, joins, completeness, next week populated);
+4. **forecast** every game that has not kicked off *and whose final injury report
+   is in the data* (see below);
+5. **rebuild the ledger page**, grading every finished week.
+
+Then record the forecasts before kickoff, so the ledger stays a dated,
+pre-registered record:
 
 ```bash
-python -m src.features.build_all
+git add data/predictions/*.parquet && git commit -m "Forecast: 2026 week 3"
 ```
 
-**Step 3 — check it worked:**
+### When to run it: the injury report
+
+**The injury data has to be pulled shortly before game time.** The model's only
+leading indicator is `injury_impact` — who is out, weighted by how much they
+play — and it is built from each player's game status (Out / Doubtful /
+Questionable). Teams only assign those statuses in the **final** injury report
+before each game:
+
+| Game day | Final report | Run the forecast |
+|---|---|---|
+| Thursday | Wednesday afternoon | Thursday afternoon |
+| Sunday | Friday afternoon | Sunday morning |
+| Monday | Saturday afternoon | Sunday morning |
+| Saturday | Thursday afternoon | Friday or Saturday morning |
+
+Earlier in the week the report is nearly empty (on the Thursday of 2026 week 3,
+8 of 259 rows had a status, all for the two Thursday-night teams). A forecast
+made then quietly treats every team as fully healthy. Nothing errors; the
+numbers just look like football scores.
+
+So **`predict_week` refuses to forecast a game until its final report is in the
+data.** It checks that the injuries were pulled after the report was due, and
+that the report actually shows up for that slate. Held-back games are listed
+with the time their report is due. That makes the weekly rhythm:
+
+- **Thursday afternoon:** `python -m src.weekly` forecasts the Thursday game.
+- **Sunday morning:** `python -m src.weekly` forecasts the Sunday and Monday games.
+
+Running it at any other time is safe. It forecasts only what is ready, and it
+never touches a forecast for a game that has kicked off or that it did not
+re-forecast. If you truly need an early number, `--allow-unsettled-injuries`
+forecasts everything and tags those games *pre-injury-report* on the ledger.
+
+### The pieces, one at a time
 
 ```bash
-pytest tests/ -v
+python -m src.ingest.pull_all              # pull + validate (or --check-only)
+python -m src.features.build_all           # all 11 feature stages, in order
+pytest tests/ -m "requires_data and not backtest_artifacts"   # check the built data
+python -m src.predict.predict_week --dry-run   # what is ready to forecast, and why
+python -m src.predict.predict_week --html      # forecast what is ready + the ledger
+python -m src.predict.build_report         # re-grade the ledger only (1 second)
 ```
 
-**Step 4 — train and score a model:**
+### Re-benchmarking every model
 
 ```bash
-python -m src.models.baseline           # the no-ML benchmark, ~3 seconds
-python -m src.models.linear             # ~2.5 minutes
-python -m src.models.poisson_glm        # ~1 minute
-python -m src.models.gaussian_process   # ~30 minutes, currently the best
-python -m src.models.stacking           # ~1 minute, needs the three above
+python -m src.models.run_all               # every model's walk-forward, in parallel
+python -m src.validate.model_report        # the deep evaluation (see section 9)
+python -m src.validate.model_scoreboard --common-games
+python -m src.validate.error_analysis
 ```
 
-**Compare everything at once:**
+`run_all` runs all 17 backtests (every production, shelved and experimental
+model plus the stack and the composite) in dependency order, 4 at a time, with
+a log per model in `data/processed/logs/`. It takes about 40 minutes, most of
+it the Gaussian Process. Each backtest records a hash of the data it was
+scored on. Tests flag a backtest as stale only when the played games it read
+have actually changed, not whenever a file is re-saved.
 
-```bash
-python -m src.validate.model_scoreboard --against baseline --common-games
-```
+### Which models forecast live
 
-### The weekly loop, once you're set up
-
-Every Tuesday, after the previous week's games are in the books:
-
-```bash
-python src/ingest/pull_schedules.py      # last week's final scores
-python src/ingest/pull_pbp.py
-python src/ingest/pull_injuries.py
-python -m src.features.build_all         # ~30s
-python -m src.predict.predict_week --html   # ~40s: predicts the new week,
-                                            # grades the old one, rebuilds the page
-firefox data/predictions/index.html
-```
-
-Step 4 is the only slow part and the only one that touches a model. If you just
-want last week's predictions graded against the results that landed, skip it and
-run `python -m src.predict.build_report` instead — a second, no refitting.
+Set in `config.yaml` under `live:`. That's the individual models and the
+composite (an equal-weight average of the members, computed before rounding).
+Any model in `src/models/registry.py` that can forecast an unplayed game is
+allowed there. The config is checked before anything is fitted.
 
 ---
 
@@ -286,23 +325,25 @@ Everything above scores the past. This predicts the future.
 python -m src.predict.predict_week --html
 ```
 
-That fits every model on all completed games, predicts the next unplayed week,
-prints a table, and writes:
+That fits the live models on every completed game before the first game it is
+forecasting, predicts every game whose final injury report is in, prints a
+table, and writes:
 
 ```
-data/predictions/2026_wk02.parquet   this week's numbers, one file per week
+data/predictions/2026_wk03.parquet   this week's forecasts, one file per week
 data/predictions/index.html          the ledger: every week, graded
 ```
 
-Pick a specific week with `--season 2026 --week 2`. Add `--json out.json` if you
-want the raw numbers somewhere else.
+Pick a specific week with `--season 2026 --week 3`. Add `--json out.json` if you
+want the raw numbers somewhere else. Each row records when it was forecast,
+which models made it, whether its injury report was final, and the code version.
 
 ### The ledger
 
 The page is not a snapshot of one week. It reads **every** prediction file on
 disk and shows them all, opening on the most recent:
 
-- a week that hasn't been played yet shows the four model predictions next to
+- a week that hasn't been played yet shows the live models' predictions next to
   the market's implied score;
 - a week that has been played shows the same predictions with the **final score
   beside them**, how far off each model was, and whether it picked the winner;
@@ -391,17 +432,25 @@ the repo root (`python -m src.models.linear`), not as a file path.
 
 ```
 src/
-  ingest/      downloads raw data. Run these first.
+  weekly.py    the weekly run: pull -> build -> check -> forecast -> ledger
+  config.py    reads and validates the live-model block of config.yaml
+  schedule.py  kickoff times (one implementation, used everywhere)
+  provenance.py  content hashes and git state for every artefact
+  ingest/      downloads raw data; pull_all.py pulls everything and validates it
   features/    turns raw data into model inputs. build_all.py runs them in order.
   models/      the prediction models themselves
+    registry.py  every model, described once (run_all, predict_week use it)
+    run_all.py   every walk-forward backtest, in parallel
+    composite.py the live composite, backtested exactly as published
     unused/    models that were built, measured, and shelved — kept on purpose
   predict/     forecasts for games that haven't happened, and the ledger page
-  validate/    the scoring harness, error analysis, calibration
+    injury_readiness.py  is a game's final injury report in the data yet?
+  validate/    the scoring harness, error analysis, calibration, model report
   experiments/ one-off tests of "would this idea help?" — never touched by production
 tests/         correctness and leakage gates
 data/
-  raw/         downloaded data (not in git)
-  processed/   built features (not in git)
+  raw/         downloaded data (not in git); _pull_manifest.json says when
+  processed/   built features, backtests, logs and reports (not in git)
   predictions/ one parquet per predicted week — IN git on purpose, as a dated
                record of what was claimed before kickoff. index.html is not.
 ```
@@ -415,6 +464,8 @@ would mean someone rebuilds them in a year. Their docstrings say what happened.
 **Experiments never touch production.** Testing a new idea means writing a
 standalone script in `src/experiments/` that reads production data and writes
 nothing back. Production changes only after the experiment shows the idea works.
+Experiments that rebuild a feature table use production's own assembler
+(`build_game_features.assemble`), so they can't quietly drift from it.
 
 ---
 
@@ -518,7 +569,9 @@ nothing, and can never beat Vegas. Odds are used only as a scoreboard.
 
 ## 8. Testing philosophy
 
-294 tests in five layers:
+About 670 tests (run `pytest --co -q` for the current count), in five layers.
+CI runs every test that does not need `data/` on each push; the rest run
+locally after a build.
 
 1. **Data contracts** — is the downloaded data shaped correctly? (Exactly 32
    teams, no duplicate plays, scores non-negative.)
@@ -546,41 +599,66 @@ nothing, and can never beat Vegas. Odds are used only as a scoreboard.
 
 ## 9. Current status and what's next
 
-**Working:** the full data pipeline, leakage-safe evaluation, four trained
-models, a live prediction step for games that haven't been played, and a ledger
-page that grades those predictions once the results land.
+**Working:** the full data pipeline with validated pulls, leakage-safe
+evaluation, 16 benchmarked models plus a composite, a live forecast step that
+waits for each game's final injury report, a one-command weekly run, and a
+ledger page that grades every forecast once the results land.
+
+**Current benchmark** (re-run 2026-09-24 on every model, 1,456 games from 2021
+through 2026 Week 2; RMSE per team's score, pooled home and away;
+`python -m src.validate.model_report`):
+
+| Rank | Model | RMSE | Beats the no-ML baseline?* |
+|---|---|---|---|
+| 1 | **Composite** (Poisson + GP + Ridge, equal weights) — live | **9.378** | yes |
+| 2 | Poisson GLM — live | 9.380 | yes |
+| 3 | Gaussian Process — live | 9.387 | yes |
+| 4 | Ridge regression — live | 9.391 | yes |
+| 5 | Bayesian hierarchical | 9.420 | no (noise) |
+| 6 | CatBoost | 9.447 | no |
+| 7 | XGBoost | 9.460 | no |
+| 8 | Random forest | 9.464 | no |
+| 9 | Rule-based baseline | 9.476 | — |
+| 10–16 | Drive model v2, drive chain, LightGBM, logistic, RNN, Monte Carlo v1, MLP | 9.48–9.95 | no; Monte Carlo and MLP are significantly worse |
+
+\*Paired bootstrap that resamples whole weeks. Games in one week share a model
+and a scoring environment, so resampling single games gives intervals that are
+too narrow. The ridge stack is scored on 2022 onward only: on the 1,171 games
+every model shares it ties Ridge (9.298), behind the composite (9.285).
+
+What the deeper report says (all in `data/processed/reports/model_report.html`):
+
+- **The live models are near-duplicates.** Their errors correlate at 0.996–0.999,
+  which is why averaging them gains only about 0.002 points. Adding the most
+  different models (the drive models, the Bayesian model) moves the composite by
+  under 0.01, inside the noise. Fitted weights do no better than equal ones.
+- **Totals lean high, and most in prime time.** The typical game is
+  over-predicted: the median total error is +1.5 points and 55% of games finish
+  under the model's total. Rare blowouts pull the *mean* back to about +0.4.
+  Prime-time totals are over-predicted by about 1.5 points (Monday night 2.3,
+  Sunday night 1.7), against about 0.1 in daytime games. No model knows when a
+  game kicks off.
+- **Three teams are mis-rated by every model**, beyond the noise: Buffalo is
+  under-rated (margin about 3 points too low), while Atlanta and Tennessee are
+  over-rated (about 2.9).
+- **The market is still ahead:** closing-line margin error 12.68 against the
+  composite's 13.06.
+
+**Is it ready to bet with? No.** Beating the market requires about 52.4% against
+the spread to cover the vig. The composite is at 50.9% (95% interval 48.4–53.6%),
+which is a coin flip. It predicts *scores* respectably and it does not predict
+*market inefficiency* at all. Those are different jobs, and only the first one is
+going well.
 
 **Known gaps:**
 - No live starting-quarterback source for future games. Historical rows know who
   actually played; on Wednesday you don't. `load_depth_charts` is the obvious
   place to look and hasn't been tried.
-- The three-model ensemble does not beat the best single model, and its
-  calibration is *worse* than its own inputs — the meta-model refits on
-  predictions that have already had the bias correction applied to them, and
-  over-corrects. Either feed it uncorrected inputs or drop it. Not yet done.
-- Predicted totals ran about 2 points high in 2026 Week 1. Three fixes were
-  tested and all three were rejected (they each made the scores worse); the
-  mechanism is written up in `src/experiments/` so nobody re-tries them blind.
-- Against the spread the model is at coin-flip, not profitable. See below.
-
-**Current benchmark** (1,440 games, 2021–2026, RMSE per team's score — the
-number every future change is measured against):
-
-| Model | Error | Beats the no-ML baseline? |
-|---|---|---|
-| Poisson GLM | **9.371** | yes, confirmed by bootstrap |
-| Gaussian Process | 9.376 | yes, confirmed by bootstrap |
-| Ridge regression | 9.385 | not distinguishable from noise |
-| Rule-based baseline | 9.458 | — |
-
-(On the 1,155 games all sixteen models share — the only fair head-to-head — the
-order is GP 9.277, Poisson 9.279, Ridge 9.290, stack 9.293, baseline 9.350.)
-
-Home-score bias, which was the last thing fixed, now sits at +0.06 to +0.09
-points across the active models. It was +0.78 before the correction.
-
-**Is it ready to bet with? No.** Beating the market requires about 52.4% against
-the spread to cover the vig; the model is at 51.0%, which is inside the range you
-would expect from a coin flip over this many games. It predicts *scores*
-respectably and it does not predict *market inefficiency* at all. Those are
-different jobs, and only the first one is going well.
+- A kickoff-window feature (prime time) is the cheapest candidate for the
+  prime-time totals bias above. It is untested and needs a walk-forward
+  experiment before anything ships.
+- The roster-continuity experiment must be re-run: its builder had a bug (fixed
+  2026-09-24) that corrupted the features it was measured with.
+- The Sunday cloud routine cannot push its forecasts (the Claude GitHub App has
+  no access to the repo), so run `python -m src.weekly` locally on Sunday
+  mornings until that is fixed.
