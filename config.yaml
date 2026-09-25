@@ -37,14 +37,16 @@ training:
 #   Saturday game -> Thursday's report      Monday game -> Saturday's report
 # A forecast made earlier sees an almost empty injury report (8 of 259 rows on
 # the Thursday of 2026 week 3) and silently treats every team as healthy. So a
-# week is forecast in slates, each after its own final report:
-#   Thursday afternoon  -> the Thursday game
-#   Sunday morning      -> Sunday and Monday games
-# predict_week refuses to forecast a game whose final report is not in the
-# data yet, unless --allow-unsettled-injuries is passed.
+# week is forecast in slates, each after its own final report. predict_week
+# refuses to forecast a game whose final report is not in the data yet, unless
+# --allow-unsettled-injuries is passed.
+#
+# GitHub runs the pipeline on this schedule by itself -- the cron lines in
+# .github/workflows/pipeline.yml are the source of truth; these mirror them.
 schedule:
-  thursday_slate: "Thursday ~13:00 America/Chicago"
-  sunday_slate: "Sunday ~06:00 America/Chicago"
+  daily: "13:37 UTC -- whatever became ready (Thu game; Sat games; Sun slate)"
+  sunday_early: "11:37 UTC -- Sunday + Monday games, before London kickoffs"
+  tuesday: "13:37 UTC -- grade the week + re-run every backtest"
 
 # READ BY CODE. The models fitted for every live forecast, and the composite
 # built from them. Names must exist in src/models/registry.py and be able to

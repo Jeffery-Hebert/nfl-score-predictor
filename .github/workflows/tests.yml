@@ -16,11 +16,10 @@
 # torch is deliberately not installed here -- no test imports it, and the
 # CPU-wheel index URL breaks the install (see the note in requirements.txt).
 #
-# This is the only workflow in the repo. A weekly-smoke-test workflow used to sit
-# beside it, firing a Wednesday cron whose single step was `import nflreadpy`.
-# The scheduled routines now pull that library's data three times a week and
-# would fail far louder than an import check, so it was removed rather than
-# maintained as a second thing to keep green.
+# The scheduled pipeline itself -- pull, build, test, forecast, commit -- is
+# .github/workflows/pipeline.yml. (A weekly smoke-test workflow whose single step
+# was `import nflreadpy` used to sit here too; the pipeline pulls that library's
+# data daily in season and fails far louder, so it was removed.)
 
 name: tests
 

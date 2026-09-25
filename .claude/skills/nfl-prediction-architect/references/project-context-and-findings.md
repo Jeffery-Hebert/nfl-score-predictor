@@ -1044,6 +1044,12 @@ Operational:
   overrides and tags the forecast.
 - **The Sunday routine's push fails** (403: the Claude GitHub App has no access to
   the repo), so its forecasts never reach origin. Week 2's Sunday refresh was lost.
+- **Replaced by GitHub Actions** (same day): `.github/workflows/pipeline.yml` runs
+  `python -m src.weekly --only-in-season` daily 13:37 UTC (+ Sunday 11:37, and
+  `--backtest` on Tuesdays) and commits changed records with its own token. The
+  default week is now the next game NOT yet kicked off (the old rule failed every
+  Tuesday before Monday night's score posted, and crashed in the offseason), and
+  a re-run that reproduces a record leaves it untouched.
 - Staleness is now judged by a hash of the PLAYED rows a backtest read, not mtimes.
 - The feature-build freshness gate likewise compares input fingerprints recorded
   by `build_all`, not mtimes. The composite backtest now REFUSES members that

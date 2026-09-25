@@ -1,0 +1,186 @@
+# The whole pipeline, run by GitHub on a schedule. No person, no secret and no
+# Claude involved: nflverse data is public, and this workflow's own token
+# (permissions below) commits the forecasts back to the repository.
+#
+# Every run (src/weekly.py):
+#   pull     schedules, play-by-play, injuries, snap counts -- and cross-check them
+#   build    every feature table, in dependency order
+#   test     every unit test, leakage gate and data check
+#   predict  refit the live models on every completed game and forecast each
+#            game whose FINAL injury report is out and which has not kicked off
+#   ledger   rebuild the graded ledger page
+#   commit   any forecast record that changed, as "Forecast: <season> week <N>"
+# Tuesdays also re-run every model's walk-forward backtest (the full re-benchmark)
+# and write the model report.
+#
+# WHEN (UTC). A game can only be forecast after its final injury report --
+# Wednesday's for a Thursday game, Thursday's for Saturday, Friday's for Sunday,
+# Saturday's for Monday (src/predict/injury_readiness.py) -- and never after it
+# kicks off, so the runs are:
+#   every day 13:37   whatever has just become ready; Monday's run refits the
+#                     Monday night game on Sunday's results; Tuesday's grades
+#                     the week and re-benchmarks every model
+#   Sunday 11:37      the Sunday slate, ahead of the 9:30am ET London games
+# A run that finds nothing ready, or reproduces forecasts already on file,
+# commits nothing. From a week after the Super Bowl to a week before the season
+# a run stops after one schedule check (--only-in-season).
+#
+# Where to look: each run's page shows the current week's forecasts (and the
+# leaderboard on Tuesdays); the ledger page, model report and logs are attached
+# as artifacts. Failures email whoever last edited this file's schedule.
+#
+# By hand: Actions -> pipeline -> Run workflow, or
+#     gh workflow run pipeline.yml -f backtest=true
+# Pause: Actions -> pipeline -> "..." -> Disable workflow.
+
+name: pipeline
+
+on:
+  schedule:
+    - cron: "37 13 * * 0,1,3-6"
+    - cron: "37 13 * * 2" # Tuesday: also the full backtest
+    - cron: "37 11 * * 0"
+  workflow_dispatch:
+    inputs:
+      backtest:
+        description: "Also re-run every model's backtest and the model report (about an hour)"
+        type: boolean
+        default: false
+      publish:
+        description: "Commit changed forecasts"
+        type: boolean
+        default: true
+      allow_unsettled_injuries:
+        description: "Also forecast games whose final injury report is not out yet (recorded as provisional)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write # commit forecast records back
+
+concurrency:
+  group: pipeline # one run at a time: a second waits instead of racing the push
+  cancel-in-progress: false
+
+jobs:
+  pipeline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    env:
+      BACKTEST: ${{ github.event.schedule == '37 13 * * 2' || inputs.backtest == true }}
+      UNSETTLED: ${{ inputs.allow_unsettled_injuries == true }}
+      PUBLISH: ${{ github.event_name == 'schedule' || inputs.publish == true }}
+      BOT: github-actions[bot]
+      BOT_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0 # full history, so the push can rebase onto a moved branch
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # Only the RNN needs torch, and only the backtest runs it. Its wheel needs
+      # its own index (see requirements.txt); if it fails the RNN is skipped.
+      - name: Install torch for the RNN backtest
+        if: env.BACKTEST == 'true'
+        continue-on-error: true
+        run: pip install torch --index-url https://download.pytorch.org/whl/cpu
+
+      - name: Pull, build, test, forecast, grade
+        run: |
+          flags="--only-in-season"
+          if [ "$BACKTEST" = "true" ]; then flags="$flags --backtest"; fi
+          if [ "$UNSETTLED" = "true" ]; then flags="$flags --allow-unsettled-injuries"; fi
+          set -o pipefail
+          # The log goes OUTSIDE the checkout: an untracked file in it would mark
+          # the build and every forecast's code_version "dirty".
+          python -m src.weekly $flags 2>&1 | tee "$RUNNER_TEMP/pipeline.log"
+
+      # Runs even if a later part of the pipeline step failed: a forecast is
+      # written only after every test has passed and every model has fitted, so
+      # a record on disk is a valid one -- a broken ledger page must not keep it
+      # from being recorded before kickoff.
+      - name: Commit changed forecasts
+        if: ${{ !cancelled() && env.PUBLISH == 'true' }}
+        run: |
+          git add data/predictions/*.parquet
+          if git diff --cached --quiet; then
+            echo "No forecast changed. Nothing to commit."
+            if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+              # Prove this token can push now, so the first real forecast is
+              # not the test: a throwaway branch, created and deleted.
+              ref="refs/heads/pipeline-push-check-$GITHUB_RUN_ID"
+              git push -q origin "HEAD:$ref"
+              git push -q origin --delete "$ref"
+              echo "Push access verified."
+            fi
+            exit 0
+          fi
+          python -m src.predict.summarize --commit-message \
+            $(git diff --cached --name-only) > "$RUNNER_TEMP/message.txt"
+          echo "Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            >> "$RUNNER_TEMP/message.txt"
+          git -c user.name="$BOT" -c user.email="$BOT_EMAIL" \
+            commit -q -F "$RUNNER_TEMP/message.txt"
+          git pull -q --rebase --autostash origin "$GITHUB_REF_NAME"
+          git push -q origin "HEAD:$GITHUB_REF_NAME"
+          git log -1 --format="Committed %h: %s"
+
+      # GitHub disables a public repository's schedules after 60 days without
+      # activity, and the offseason is longer than that. A commit counts.
+      - name: Keep the schedule alive through the offseason
+        if: github.event_name == 'schedule'
+        run: |
+          age=$(( $(date +%s) - $(git log -1 --format=%ct) ))
+          if [ "$age" -gt $(( 45 * 86400 )) ]; then
+            git -c user.name="$BOT" -c user.email="$BOT_EMAIL" commit -q --allow-empty \
+              -m "Keep the scheduled pipeline enabled (no commits in 45 days)"
+            git pull -q --rebase --autostash origin "$GITHUB_REF_NAME"
+            git push -q origin "HEAD:$GITHUB_REF_NAME"
+          fi
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "## Pipeline run, $(date -u '+%a %b %d %H:%M UTC')"
+            if grep -q "Nothing to pull, build or forecast" "$RUNNER_TEMP/pipeline.log" 2>/dev/null; then
+              echo "No NFL game in the last 2 days or the next 9: nothing to do."
+              exit 0
+            fi
+            if [ -n "$(git status --porcelain -- data/predictions)" ]; then
+              echo "Forecasts changed but were not committed (publish was off)."
+            elif git diff --quiet "$GITHUB_SHA" HEAD -- data/predictions; then
+              echo "No forecast changed in this run."
+            else
+              echo "Forecasts changed and were committed: $(git log -1 --format=%h -- data/predictions)."
+            fi
+            echo
+            latest=$(ls data/predictions/*.parquet | sort | tail -1)
+            python -m src.predict.summarize "$latest" || true
+            if [ "$BACKTEST" = "true" ] && [ -f data/processed/reports/leaderboard.csv ]; then
+              echo
+              python -m src.predict.summarize \
+                --leaderboard data/processed/reports/leaderboard.csv || true
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Attach the ledger, model report and logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: pipeline-${{ github.run_number }}
+          path: |
+            ${{ runner.temp }}/pipeline.log
+            data/predictions/index.html
+            data/processed/reports/
+            data/processed/logs/
+          if-no-files-found: ignore
+          retention-days: 30

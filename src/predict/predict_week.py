@@ -23,10 +23,10 @@ WHEN. A game is only forecast once its FINAL injury report is in the data
 (src/predict/injury_readiness.py): the Wednesday report for a Thursday game,
 Friday's for Sunday, Saturday's for Monday. Earlier, injury_impact -- the
 model's one leading indicator -- is near zero for everybody and the forecast is
-built on inputs the backtest never saw. So run it per slate: Thursday afternoon
-for the Thursday game, Sunday morning for the rest, re-pulling data each time
-(python -m src.weekly does both). --allow-unsettled-injuries overrides this, and
-every forecast records whether its report was final.
+built on inputs the backtest never saw. So it runs per slate, re-pulling data
+each time: .github/workflows/pipeline.yml runs python -m src.weekly daily, and
+each run forecasts whatever has just become ready. --allow-unsettled-injuries
+overrides this, and every forecast records whether its report was final.
 
 Training window. Every completed game in model_table.parquet before the first
 game being forecast. The completeness guard below refuses to run if a finished
@@ -35,7 +35,10 @@ game is missing from the table.
 Records. One parquet per week in data/predictions/, tracked in git. A game that
 has kicked off is never re-forecast; a game not forecast in this run keeps the
 forecast it already has. Each row carries its own generated_at, the models and
-composite members that produced it, and the code version.
+composite members that produced it, and the code version. A run that
+reproduces the record's forecasts exactly leaves the file untouched, so
+re-running (the scheduled pipeline runs daily) never makes a forecast look
+younger than it is or commits an identical record.
 
 Market lines. spread_line and total_line are printed ALONGSIDE the predictions
 and are NEVER inputs. They are converted into the score pair the market
@@ -48,7 +51,7 @@ Rounding. Stored and displayed to one decimal place. A tenth of a point is
 already far finer than the model can resolve -- typical error is over nine
 points.
 
-Run: python -m src.predict.predict_week                  # next unplayed week
+Run: python -m src.predict.predict_week                  # week of the next kickoff
      python -m src.predict.predict_week --season 2026 --week 3
      python -m src.predict.predict_week --dry-run        # plan only: what is ready
      python -m src.predict.predict_week --html           # + rebuild the ledger page
@@ -58,6 +61,7 @@ Output: data/predictions/<season>_wk<week>.parquet
 """
 
 import argparse
+import io
 import json
 import sys
 from pathlib import Path
@@ -91,15 +95,33 @@ def load_table() -> pd.DataFrame:
     return df
 
 
-def pick_week(df: pd.DataFrame, season, week):
-    """Default to the earliest unplayed week."""
-    upcoming = df[df["home_score"].isna()].sort_values("gameday")
+def pick_week(df: pd.DataFrame, season, week, now=None):
+    """The week to forecast: as given, or else the week of the next game that
+    has not kicked off. None when no game is left to kick off (the offseason).
+
+    Not "the earliest week with an unplayed game", which the first version
+    used: a game that has kicked off but has no score yet -- Monday night's, on
+    Tuesday morning, before the result is published -- pinned the default to a
+    week with nothing left to forecast, and the run failed."""
+    if (season is None) != (week is None):
+        sys.exit("ERROR: give both --season and --week, or neither.")
+    if season is not None:
+        return int(season), int(week)
+    now = now if now is not None else pd.Timestamp.now(tz="UTC")
+    unplayed = df[df["home_score"].isna()]
+    if unplayed.empty:
+        return None
+    kickoff = pd.to_datetime(
+        unplayed["game_id"].map(kickoff_utc(unplayed["game_id"])), utc=True
+    )
+    today_et = now.tz_convert("US/Eastern").tz_localize(None).normalize()
+    # A game with no known kickoff counts as upcoming only from its date on.
+    ahead = (kickoff > now) | (kickoff.isna() & (unplayed["gameday"] >= today_et))
+    upcoming = unplayed[ahead]
     if upcoming.empty:
-        sys.exit("ERROR: no unplayed games in the table. Re-pull schedules.")
-    if season is None or week is None:
-        row = upcoming.iloc[0]
-        return int(row["season"]), int(row["week"])
-    return int(season), int(week)
+        return None
+    row = upcoming.sort_values("gameday").iloc[0]
+    return int(row["season"]), int(row["week"])
 
 
 def select_pending(target: pd.DataFrame, now: pd.Timestamp) -> pd.DataFrame:
@@ -222,6 +244,60 @@ def freeze_started_games(fresh: pd.DataFrame, path: Path, now) -> pd.DataFrame:
     ).sort_values(["kickoff", "game_id"], na_position="last")
 
 
+# Columns that differ between runs without the forecast differing: when the
+# run happened, from which commit, and the betting line at that moment (which
+# is reference only, never an input).
+RUN_METADATA = [
+    "generated_at",
+    "code_version",
+    "spread_line",
+    "total_line",
+    "market_home",
+    "market_away",
+]
+
+
+def _canonical(df: pd.DataFrame) -> pd.DataFrame:
+    """Sorted by game, datetimes at one resolution: so two records compare by
+    what they say, not by how pandas happened to store it."""
+    df = df.sort_values("game_id").reset_index(drop=True)
+    for c in df.columns:
+        if isinstance(df[c].dtype, pd.DatetimeTZDtype):
+            df[c] = df[c].dt.tz_convert("UTC").astype("datetime64[ns, UTC]")
+        elif pd.api.types.is_datetime64_dtype(df[c]):
+            df[c] = df[c].astype("datetime64[ns]")
+    return df
+
+
+def unchanged(path: Path, record: pd.DataFrame) -> bool:
+    """True when `record` holds exactly the forecasts already on disk, apart
+    from RUN_METADATA.
+
+    Rewriting the file then would only move generated_at later -- making each
+    forecast look younger than it is -- and the scheduled pipeline would commit
+    an identical record several times a week. Compared as STORED (through a
+    parquet round trip), so an in-memory dtype is not mistaken for a change."""
+    if not path.exists():
+        return False
+    buf = io.BytesIO()
+    record.to_parquet(buf, index=False)
+    new = pd.read_parquet(io.BytesIO(buf.getvalue()))
+    old = pd.read_parquet(path)
+    if set(new.columns) != set(old.columns) or len(new) != len(old):
+        return False
+    cols = [c for c in new.columns if c not in RUN_METADATA]
+    try:
+        pd.testing.assert_frame_equal(
+            _canonical(new[cols]),
+            _canonical(old[cols]),
+            check_dtype=False,
+            check_exact=True,
+        )
+    except AssertionError:
+        return False
+    return True
+
+
 def market_reference(game_ids) -> pd.DataFrame:
     """Closing spread/total and the score pair they imply. Reference only."""
     s = pd.read_parquet(SCHEDULES)
@@ -314,7 +390,15 @@ def main(argv=None):
         )
 
     df = load_table()
-    season, week = pick_week(df, args.season, args.week)
+    picked = pick_week(df, args.season, args.week)
+    if picked is None:
+        print(
+            "No game in the table has yet to kick off: the season is over, or the "
+            "schedule pull is out of date (python -m src.ingest.pull_all). "
+            "Nothing to forecast."
+        )
+        return 0
+    season, week = picked
     target = df[(df["season"] == season) & (df["week"] == week)].copy()
     if target.empty:
         sys.exit(f"ERROR: no games found for season {season} week {week}.")
@@ -430,7 +514,14 @@ def main(argv=None):
     path = OUT_DIR / f"{season}_wk{week:02d}.parquet"
     out = freeze_started_games(out, path, now)
     out = out.sort_values(["kickoff", "game_id"], na_position="last")
-    out.to_parquet(path, index=False)
+    if unchanged(path, out):
+        out = pd.read_parquet(path)
+        print(
+            "\nEvery forecast matches the record already on file; "
+            f"{path} left as it is."
+        )
+    else:
+        out.to_parquet(path, index=False)
 
     shown = [comp["name"]] + [m for m in live["models"] if m in raw]
     print(
@@ -466,7 +557,7 @@ def main(argv=None):
         print(
             "*provisional: forecast before the game's final injury report was in the data."
         )
-    print(f"Saved to {path}")
+    print(f"Record: {path}")
 
     if args.html:
         # Deliberately NOT a page for this week alone. The report is rebuilt

@@ -217,6 +217,36 @@ than no test, because it creates false confidence.
 
 ## 5. Running it
 
+### It runs itself, on GitHub
+
+Nothing has to be run by hand. `.github/workflows/pipeline.yml` runs the whole
+pipeline on GitHub's machines on a schedule: pull the latest data, rebuild every
+feature table, run every test and data check, refit the live models, forecast
+every game whose final injury report is out, grade the ledger, and **commit any
+forecast that changed** back to this repository. No secrets, no person, no
+Claude. The data is public, and the workflow's own token makes the commit.
+
+| When (UTC) | What it does |
+|---|---|
+| Every day, 13:37 | Forecasts whatever has become ready since the last run: the Thursday game (Thursday), Saturday games (Friday), the Sunday slate (Saturday). Monday's run refits the Monday night game on Sunday's results. |
+| Sunday, 11:37 | Re-forecasts the Sunday and Monday games on the latest data, before the 9:30am ET London kickoffs |
+| Tuesday, 13:37 | Grades the week and re-runs **every** model's walk-forward backtest plus the model report |
+
+A game is never forecast before its final injury report (below) or after it
+kicks off. A run that finds nothing ready, or reproduces forecasts already on
+file, commits nothing. Between seasons each run stops after one schedule check.
+
+- **Results:** forecasts land in `data/predictions/` as commits titled
+  `Forecast: <season> week <N> (automated)`. Each run's page under the
+  **Actions** tab shows the current week's forecasts, and the leaderboard on
+  Tuesdays. The ledger page, model report and logs are attached as downloads.
+- **Failures** are emailed by GitHub, and nothing half-finished is committed.
+- **By hand:** Actions → pipeline → *Run workflow* (options: backtest, publish,
+  forecast early), or `gh workflow run pipeline.yml -f backtest=true`.
+- **Pause:** Actions → pipeline → ⋯ → *Disable workflow*.
+
+Everything below runs the same code on your own machine.
+
 Requires Python 3.12. Run everything from the repo root.
 
 ```bash
@@ -236,13 +266,18 @@ That does, in order, stopping at the first failure with the fix spelled out:
    score, every scored game has plays, and play-by-play's final score matches the
    schedule's);
 2. **build** every feature table in dependency order (~50 seconds);
-3. **check** the built data (leakage, joins, completeness, next week populated);
+3. **test** everything: every unit test and leakage gate, and every check on the
+   built data (joins, completeness, next week populated);
 4. **forecast** every game that has not kicked off *and whose final injury report
    is in the data* (see below);
 5. **rebuild the ledger page**, grading every finished week.
 
-Then record the forecasts before kickoff, so the ledger stays a dated,
-pre-registered record:
+`--backtest` adds the full re-benchmark before step 4. `--only-in-season` makes
+the run a no-op unless a game is within 2 days back or 9 ahead. The scheduled
+workflow passes both, as appropriate.
+
+On GitHub the workflow commits the forecasts itself. Run locally, record them
+before kickoff, so the ledger stays a dated, pre-registered record:
 
 ```bash
 git add data/predictions/*.parquet && git commit -m "Forecast: 2026 week 3"
@@ -271,7 +306,8 @@ numbers just look like football scores.
 So **`predict_week` refuses to forecast a game until its final report is in the
 data.** It checks that the injuries were pulled after the report was due, and
 that the report actually shows up for that slate. Held-back games are listed
-with the time their report is due. That makes the weekly rhythm:
+with the time their report is due. The scheduled workflow's daily runs follow
+that rhythm automatically. By hand, it would be:
 
 - **Thursday afternoon:** `python -m src.weekly` forecasts the Thursday game.
 - **Sunday morning:** `python -m src.weekly` forecasts the Sunday and Monday games.
@@ -286,7 +322,7 @@ forecasts everything and tags those games *pre-injury-report* on the ledger.
 ```bash
 python -m src.ingest.pull_all              # pull + validate (or --check-only)
 python -m src.features.build_all           # all 11 feature stages, in order
-pytest tests/ -m "requires_data and not backtest_artifacts"   # check the built data
+pytest tests/ -m "not backtest_artifacts"   # every test that needs no backtest
 python -m src.predict.predict_week --dry-run   # what is ready to forecast, and why
 python -m src.predict.predict_week --html      # forecast what is ready + the ledger
 python -m src.predict.build_report         # re-grade the ledger only (1 second)
@@ -431,8 +467,11 @@ the repo root (`python -m src.models.linear`), not as a file path.
 ## 6. Project layout
 
 ```
+.github/workflows/
+  pipeline.yml the scheduled pipeline: runs src/weekly.py, commits forecasts
+  tests.yml    unit tests and leakage gates on every push
 src/
-  weekly.py    the weekly run: pull -> build -> check -> forecast -> ledger
+  weekly.py    the weekly run: pull -> build -> test -> forecast -> ledger
   config.py    reads and validates the live-model block of config.yaml
   schedule.py  kickoff times (one implementation, used everywhere)
   provenance.py  content hashes and git state for every artefact
@@ -445,6 +484,7 @@ src/
     unused/    models that were built, measured, and shelved — kept on purpose
   predict/     forecasts for games that haven't happened, and the ledger page
     injury_readiness.py  is a game's final injury report in the data yet?
+    summarize.py         forecast tables for the workflow's page and commits
   validate/    the scoring harness, error analysis, calibration, model report
   experiments/ one-off tests of "would this idea help?" — never touched by production
 tests/         correctness and leakage gates
@@ -659,6 +699,5 @@ going well.
   experiment before anything ships.
 - The roster-continuity experiment must be re-run: its builder had a bug (fixed
   2026-09-24) that corrupted the features it was measured with.
-- The Sunday cloud routine cannot push its forecasts (the Claude GitHub App has
-  no access to the repo), so run `python -m src.weekly` locally on Sunday
-  mornings until that is fixed.
+- ~~The Sunday cloud routine cannot push its forecasts.~~ Replaced 2026-09-24 by
+  the GitHub Actions pipeline (section 5), which needs no outside access.

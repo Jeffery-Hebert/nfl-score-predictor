@@ -204,3 +204,103 @@ def test_skipping_a_member_shrinks_the_composite_and_records_it(world):
     assert "linear_home" not in out.columns
     assert set(out["composite_members"]) == {"poisson"}
     assert (out["combined_home"] == out["poisson_home"]).all()
+
+
+# ------------------------------------------- re-runs, and which week to run --
+
+FINAL = pd.Timedelta(days=2, hours=23)  # pulled after every final report was due
+
+
+def forecast_cols(df):
+    return [c for c in df.columns if c.startswith("combined_")]
+
+
+def test_a_rerun_that_reproduces_the_forecasts_leaves_the_record_alone(world):
+    # The scheduled pipeline runs daily; each identical re-run must not rewrite
+    # the record, move its generated_at later, or produce a commit.
+    pulled(world, pd.Timestamp.now(tz="UTC") + FINAL)
+    predict_week.main(["--season", "2026", "--week", "21"])
+    first = world["out"].read_bytes()
+    predict_week.main(["--season", "2026", "--week", "21"])
+    assert world["out"].read_bytes() == first
+
+
+def test_a_rerun_whose_forecasts_moved_rewrites_the_record(world):
+    pulled(world, pd.Timestamp.now(tz="UTC") + FINAL)
+    predict_week.main(["--season", "2026", "--week", "21"])
+    before = pd.read_parquet(world["out"]).sort_values("game_id")
+    table = pd.read_parquet(predict_week.MODEL_TABLE)
+    table.loc[table["week"] == 21, FEATURE_COLS] += 5.0  # new information
+    table.to_parquet(predict_week.MODEL_TABLE, index=False)
+    predict_week.main(["--season", "2026", "--week", "21"])
+    after = pd.read_parquet(world["out"]).sort_values("game_id")
+    assert (after[forecast_cols(after)] != before[forecast_cols(before)]).any().any()
+    assert (after["generated_at"].values > before["generated_at"].values).all()
+
+
+def test_by_default_the_week_is_the_next_one_with_a_game_to_kick_off(world):
+    table = predict_week.load_table()
+    # Week 20 kicked off eleven days ago. Say its results never arrived: the
+    # default must still move on to the week that has games left to forecast.
+    table.loc[table["week"] == 20, ["home_score", "away_score"]] = np.nan
+    assert predict_week.pick_week(table, None, None) == (2026, 21)
+
+
+def test_with_no_game_left_to_kick_off_there_is_nothing_to_do(world, capsys):
+    table = pd.read_parquet(predict_week.MODEL_TABLE)
+    table[table["week"] < 21].to_parquet(predict_week.MODEL_TABLE, index=False)
+    assert predict_week.main([]) == 0, "the offseason is not an error"
+    assert not world["out"].exists()
+    assert "Nothing to forecast" in capsys.readouterr().out
+
+
+def test_half_a_week_address_is_refused(world):
+    with pytest.raises(SystemExit, match="both"):
+        predict_week.main(["--week", "21"])
+
+
+class TestUnchanged:
+    @pytest.fixture
+    def on_disk(self, tmp_path):
+        rec = pd.DataFrame(
+            {
+                "game_id": ["a", "b"],
+                "combined_home": [24.6, 20.7],
+                "injury_report_final": [True, True],
+                "kickoff": pd.to_datetime(["2026-09-25 00:15", "2026-09-27 17:00"], utc=True),
+                "generated_at": ["2026-09-24T13:40:00+00:00"] * 2,
+                "code_version": ["abc"] * 2,
+                "spread_line": [5.5, -1.5],
+                "total_line": [43.5, 42.5],
+                "market_home": [24.5, 20.5],
+                "market_away": [19.0, 22.0],
+            }
+        )  # fmt: skip
+        path = tmp_path / "rec.parquet"
+        rec.to_parquet(path, index=False)
+        return path, rec
+
+    def test_run_metadata_and_market_moves_are_not_changes(self, on_disk):
+        path, rec = on_disk
+        again = rec.iloc[::-1].copy()  # and row order is not a change either
+        again["generated_at"] = "2026-09-26T13:41:00+00:00"
+        again["code_version"] = "def"
+        again["spread_line"] += 1.0
+        again["market_home"] += 0.5
+        again["kickoff"] = again["kickoff"].astype("datetime64[ns, UTC]")
+        assert predict_week.unchanged(path, again)
+
+    @pytest.mark.parametrize(
+        "column, value",
+        [("combined_home", 24.7), ("injury_report_final", False)],
+    )
+    def test_a_different_forecast_or_status_is(self, on_disk, column, value):
+        path, rec = on_disk
+        again = rec.copy()
+        again.loc[0, column] = value
+        assert not predict_week.unchanged(path, again)
+
+    def test_a_new_column_or_no_file_is(self, on_disk, tmp_path):
+        path, rec = on_disk
+        assert not predict_week.unchanged(path, rec.assign(extra=1))
+        assert not predict_week.unchanged(tmp_path / "missing.parquet", rec)

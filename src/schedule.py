@@ -39,3 +39,19 @@ def kickoff_by_game(schedules: pd.DataFrame, game_ids=None) -> pd.Series:
         else schedules[schedules["game_id"].isin(list(game_ids))]
     )
     return pd.Series(kickoff_utc(s).to_numpy(), index=s["game_id"].to_numpy())
+
+
+def games_near(
+    schedules: pd.DataFrame, now: pd.Timestamp, days_before=2, days_after=9
+) -> pd.DataFrame:
+    """Games kicking off in [now - days_before, now + days_after].
+
+    The scheduled pipeline's "is there anything to do?": a result from the last
+    two days to grade and re-benchmark on, or a game in the next nine to
+    forecast. Empty from a week after the Super Bowl until the week before the
+    next season opens -- nine days covers every gap inside a season, including
+    the one before the Super Bowl."""
+    k = kickoff_utc(schedules)
+    lo = now - pd.Timedelta(days=days_before)
+    hi = now + pd.Timedelta(days=days_after)
+    return schedules[(k >= lo) & (k <= hi)]

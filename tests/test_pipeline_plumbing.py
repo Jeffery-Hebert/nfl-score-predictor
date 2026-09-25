@@ -233,22 +233,35 @@ class TestWeekly:
             return SimpleNamespace(returncode=fail_on.get(module, 0))
 
         monkeypatch.setattr(weekly.subprocess, "run", fake_run)
-        return SimpleNamespace(ran=ran, fail_on=fail_on)
+        # In season unless a test says otherwise; never touches the network.
+        monkeypatch.setattr(
+            weekly, "games_near_now", lambda: pd.DataFrame({"game_id": ["g"]})
+        )
+        return SimpleNamespace(ran=ran, fail_on=fail_on, mp=monkeypatch)
 
     @staticmethod
     def modules(ran):
         return [cmd[2] for cmd in ran]
 
-    def test_the_normal_run_pulls_builds_checks_then_predicts(self, commands):
+    @staticmethod
+    def markers(ran):
+        return [cmd[cmd.index("-m", 3) + 1] for cmd in ran if cmd[2] == "pytest"]
+
+    def test_the_normal_run_pulls_builds_tests_predicts_then_grades(self, commands):
         assert weekly.main([]) == 0
         assert self.modules(commands.ran) == [
             "src.ingest.pull_all",
             "src.features.build_all",
             "pytest",
             "src.predict.predict_week",
+            "src.predict.build_report",
         ]
-        assert weekly.DATA_CHECKS in commands.ran[2]
-        assert "--allow-unsettled-injuries" not in commands.ran[-1]
+        # every unit test and data check, not only the data checks
+        assert (
+            self.markers(commands.ran) == [weekly.CHECKS] == ["not backtest_artifacts"]
+        )
+        predict = commands.ran[3]
+        assert "--allow-unsettled-injuries" not in predict and "--html" not in predict
 
     def test_flags_reach_the_predictor(self, commands):
         weekly.main(
@@ -262,7 +275,7 @@ class TestWeekly:
             ]
         )
         assert "src.ingest.pull_all" not in self.modules(commands.ran)
-        predict = commands.ran[-1]
+        predict = commands.ran[-2]
         assert predict[-5:] == [
             "--allow-unsettled-injuries",
             "--season",
@@ -278,15 +291,52 @@ class TestWeekly:
         assert e.value.code == 3
         assert "src.predict.predict_week" not in self.modules(commands.ran)
 
-    def test_backtest_adds_the_runner_and_the_report(self, commands):
+    def test_backtest_is_run_checked_and_reported_before_predicting(self, commands):
         weekly.main(["--skip-pull", "--backtest"])
         mods = self.modules(commands.ran)
-        assert mods.index("src.models.run_all") < mods.index(
-            "src.validate.model_report"
+        order = [
+            mods.index("src.models.run_all"),
+            mods.index("pytest", mods.index("src.models.run_all")),
+            mods.index("src.validate.model_report"),
+            mods.index("src.predict.predict_week"),
+        ]
+        assert order == sorted(order)
+        assert self.markers(commands.ran) == [weekly.CHECKS, "backtest_artifacts"]
+
+    def test_out_of_season_it_does_nothing_and_says_so(self, commands, capsys):
+        commands.mp.setattr(weekly, "games_near_now", lambda: pd.DataFrame())
+        assert weekly.main(["--only-in-season"]) == 0
+        assert commands.ran == []
+        # .github/workflows/pipeline.yml recognises an idle run by this phrase.
+        assert "Nothing to pull, build or forecast" in capsys.readouterr().out
+
+    def test_in_season_it_runs_everything(self, commands):
+        assert weekly.main(["--only-in-season"]) == 0
+        assert len(commands.ran) == 5
+
+
+class TestGamesNear:
+    NOW = pd.Timestamp("2026-09-24 18:00", tz="UTC")  # Thursday 2pm ET
+
+    def test_the_window_is_two_days_back_and_nine_ahead(self):
+        s = pd.DataFrame(
+            [
+                ("old", "2026-09-21", "13:00"),  # 3 days back: out
+                ("recent", "2026-09-23", "13:00"),  # 1 day back: in
+                ("soon", "2026-10-02", "20:15"),  # 8.3 days ahead: in
+                ("far", "2026-10-04", "13:00"),  # 10 days ahead: out
+            ],
+            columns=["game_id", "gameday", "gametime"],
         )
-        assert mods.index("src.validate.model_report") < mods.index(
-            "src.predict.predict_week"
+        got = schedule.games_near(s, self.NOW)
+        assert list(got["game_id"]) == ["recent", "soon"]
+
+    def test_the_offseason_is_empty(self):
+        s = pd.DataFrame(
+            [("sb", "2026-02-08", "18:30"), ("wk1", "2026-09-09", "20:20")],
+            columns=["game_id", "gameday", "gametime"],
         )
+        assert schedule.games_near(s, pd.Timestamp("2026-05-01", tz="UTC")).empty
 
 
 # ------------------------------------------------------------ the manifest --
