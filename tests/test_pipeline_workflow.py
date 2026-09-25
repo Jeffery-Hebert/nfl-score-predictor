@@ -58,17 +58,30 @@ class TestTheWorkflow:
     def test_every_day_is_covered(self, wf):
         days = set()
         for c in crons(wf):
-            for part in c.split()[4].split(","):
+            for part in c.split()[4].replace("*", "0-6").split(","):
                 lo, _, hi = part.partition("-")
                 days |= set(range(int(lo), int(hi or lo) + 1))
         assert days == set(range(7))
+
+    def test_every_day_has_a_second_chance(self, wf):
+        # GitHub starts schedules late (4.5 hours on 2026-09-25) and can drop
+        # them; no single late run may cost a forecast.
+        runs = {d: 0 for d in range(7)}
+        for c in crons(wf):
+            for part in c.split()[4].replace("*", "0-6").split(","):
+                lo, _, hi = part.partition("-")
+                for d in range(int(lo), int(hi or lo) + 1):
+                    runs[d] += 1
+        assert min(runs.values()) >= 2, runs
 
     def test_every_run_finishes_before_the_earliest_kickoff_it_serves(self, wf):
         # London games kick off 9:30am ET = 13:30 UTC in October (the earliest
         # of the year). Sunday needs a run well before that, allowing for
         # GitHub starting schedules late and a ~15 minute pipeline.
         sunday = [
-            c for c in crons(wf) if "0" in c.split()[4].replace("-", ",").split(",")
+            c
+            for c in crons(wf)
+            if "0" in c.split()[4].replace("*", "0-6").replace("-", ",").split(",")
         ]
         earliest = min(int(c.split()[1]) * 60 + int(c.split()[0]) for c in sunday)
         assert earliest <= 13 * 60 + 30 - 90

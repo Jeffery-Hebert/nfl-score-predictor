@@ -86,6 +86,12 @@ DP = 1
 OUT_DIR = Path("data/predictions")
 REFERENCE_MODELS = ["baseline"]  # always fitted, never averaged
 
+# A game kicking off within this margin is left as it is: a forecast made now
+# might not be committed until after kickoff, and a record's whole value is
+# that it provably came first. (GitHub has started a scheduled run 4.5 hours
+# late, so a run can begin at any moment -- including minutes before a game.)
+KICKOFF_MARGIN = pd.Timedelta(minutes=15)
+
 
 def load_table() -> pd.DataFrame:
     if not MODEL_TABLE.exists():
@@ -116,7 +122,9 @@ def pick_week(df: pd.DataFrame, season, week, now=None):
     )
     today_et = now.tz_convert("US/Eastern").tz_localize(None).normalize()
     # A game with no known kickoff counts as upcoming only from its date on.
-    ahead = (kickoff > now) | (kickoff.isna() & (unplayed["gameday"] >= today_et))
+    ahead = (kickoff > now + KICKOFF_MARGIN) | (
+        kickoff.isna() & (unplayed["gameday"] >= today_et)
+    )
     upcoming = unplayed[ahead]
     if upcoming.empty:
         return None
@@ -125,9 +133,10 @@ def pick_week(df: pd.DataFrame, season, week, now=None):
 
 
 def select_pending(target: pd.DataFrame, now: pd.Timestamp) -> pd.DataFrame:
-    """Games of the week that have not kicked off. A game with no known kickoff
-    is treated as pending -- refusing it would be worse than forecasting it."""
-    return target[target["kickoff"].isna() | (target["kickoff"] > now)]
+    """Games of the week that do not kick off within KICKOFF_MARGIN. A game with
+    no known kickoff is treated as pending -- refusing it would be worse than
+    forecasting it."""
+    return target[target["kickoff"].isna() | (target["kickoff"] > now + KICKOFF_MARGIN)]
 
 
 def training_cutoff(forecast: pd.DataFrame) -> pd.Timestamp:
@@ -409,7 +418,8 @@ def main(argv=None):
     if pending.empty:
         sys.exit(
             f"ERROR: every game in season {season} week {week} has already "
-            "kicked off. There is nothing left to forecast, and writing one now "
+            f"kicked off, or does within {KICKOFF_MARGIN.seconds // 60} minutes. "
+            "There is nothing left to forecast, and writing one now "
             "would be a backfill, not a prediction.\n"
             "Grade what is already on file instead:\n"
             "  python -m src.predict.build_report"

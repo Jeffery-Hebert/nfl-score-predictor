@@ -13,17 +13,22 @@
 # Tuesdays also re-run every model's walk-forward backtest (the full re-benchmark)
 # and write the model report.
 #
-# WHEN (UTC). A game can only be forecast after its final injury report --
-# Wednesday's for a Thursday game, Thursday's for Saturday, Friday's for Sunday,
-# Saturday's for Monday (src/predict/injury_readiness.py) -- and never after it
-# kicks off, so the runs are:
-#   every day 13:37   whatever has just become ready; Monday's run refits the
-#                     Monday night game on Sunday's results; Tuesday's grades
-#                     the week and re-benchmarks every model
+# WHEN (UTC). A game can only be forecast after its final injury report (4pm ET
+# on Wednesday for a Thursday game, Thursday for Saturday, Friday for Sunday,
+# Saturday for Monday; src/predict/injury_readiness.py), and never within 15
+# minutes of its kickoff. So the runs are:
+#   every day 21:37   soon after that day's final report (90 min in EDT, 37 in
+#                     EST): forecasts the slate it covers; any game whose
+#                     report is not in the data yet waits for the next run
+#   every day 13:37   refreshes on the overnight data; Monday's refits Monday
+#                     night on Sunday's results; Tuesday's grades the week and
+#                     re-benchmarks every model
 #   Sunday 11:37      the Sunday slate, ahead of the 9:30am ET London games
-# A run that finds nothing ready, or reproduces forecasts already on file,
-# commits nothing. From a week after the Super Bowl to a week before the season
-# a run stops after one schedule check (--only-in-season).
+# Two a day on purpose: GitHub starts scheduled runs late under load (4.5 hours,
+# on 2026-09-25) and may drop them, and every game has several chances to be
+# forecast before it kicks off. A run that finds nothing ready, or reproduces
+# forecasts already on file, commits nothing. From a week after the Super Bowl
+# to a week before the season a run stops after one schedule check.
 #
 # Where to look: each run's page shows the current week's forecasts (and the
 # leaderboard on Tuesdays); the ledger page, model report and logs are attached
@@ -37,6 +42,7 @@ name: pipeline
 
 on:
   schedule:
+    - cron: "37 21 * * *"
     - cron: "37 13 * * 0,1,3-6"
     - cron: "37 13 * * 2" # Tuesday: also the full backtest
     - cron: "37 11 * * 0"

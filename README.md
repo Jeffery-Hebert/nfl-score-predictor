@@ -228,13 +228,17 @@ Claude. The data is public, and the workflow's own token makes the commit.
 
 | When (UTC) | What it does |
 |---|---|
-| Every day, 13:37 | Forecasts whatever has become ready since the last run: the Thursday game (Thursday), Saturday games (Friday), the Sunday slate (Saturday). Monday's run refits the Monday night game on Sunday's results. |
+| Every day, 21:37 | Shortly after that day's 4pm ET final injury report (90 minutes after in daylight time, 37 in winter), forecasts the slate it covers: Wednesday → the Thursday game, Thursday → Saturday games, Friday → the Sunday slate, Saturday → Monday night |
+| Every day, 13:37 | Refreshes those forecasts on the overnight data. Monday's run refits the Monday night game on Sunday's results. |
 | Sunday, 11:37 | Re-forecasts the Sunday and Monday games on the latest data, before the 9:30am ET London kickoffs |
-| Tuesday, 13:37 | Grades the week and re-runs **every** model's walk-forward backtest plus the model report |
+| Tuesday, 13:37 | Also grades the week and re-runs **every** model's walk-forward backtest plus the model report |
 
-A game is never forecast before its final injury report (below) or after it
-kicks off. A run that finds nothing ready, or reproduces forecasts already on
-file, commits nothing. Between seasons each run stops after one schedule check.
+A game is never forecast before its final injury report (below), or within 15
+minutes of its kickoff, so every forecast is committed before its game starts.
+Two runs a day is deliberate: GitHub can start a scheduled run hours late (4½ on
+2026-09-25) or skip it, and every game still gets several chances. A run that
+finds nothing ready, or reproduces forecasts already on file, commits nothing.
+Between seasons each run stops after one schedule check.
 
 - **Results:** forecasts land in `data/predictions/` as commits titled
   `Forecast: <season> week <N> (automated)`. Each run's page under the

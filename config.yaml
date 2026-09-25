@@ -44,7 +44,8 @@ training:
 # GitHub runs the pipeline on this schedule by itself -- the cron lines in
 # .github/workflows/pipeline.yml are the source of truth; these mirror them.
 schedule:
-  daily: "13:37 UTC -- whatever became ready (Thu game; Sat games; Sun slate)"
+  evening: "21:37 UTC daily -- soon after that day's 4pm ET final report"
+  morning: "13:37 UTC daily -- refresh on overnight data (Mon: MNF refit)"
   sunday_early: "11:37 UTC -- Sunday + Monday games, before London kickoffs"
   tuesday: "13:37 UTC -- grade the week + re-run every backtest"
 

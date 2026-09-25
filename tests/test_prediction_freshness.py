@@ -157,6 +157,121 @@ class TestRawPullBehind:
 # holds, so a future feature family is covered without touching this file.
 
 
+# WHICH games. Exactly the ones the NEXT forecast run chooses from, found with
+# predict_week's own functions: the week of the next game still to kick off,
+# its games that have not kicked off, and each one's injury-report status.
+#
+# The first version checked "the earliest week with an unplayed game", all of
+# it, whatever the hour. Once the pipeline ran daily (pipeline.yml) that failed
+# most days for no fault. After Thursday night, and all of Tuesday and
+# Wednesday, no remaining game has its final injury report, so injury_impact is
+# zero for every team -- correctly. And on Monday one game is left, so EVERY
+# feature is "identical across the week's games". It first fired on the
+# scheduled run of Friday 2026-09-25: away_injury_impact, 15 games, no report.
+
+# Built from each team's injury report, which only carries game statuses once it
+# is FINAL; until then zero for every team, by design. So they are judged only
+# across games whose final report is in -- the only games a run forecasts -- and
+# only with two or more such games: one game's two teams can both honestly list
+# nobody (2-4% of teams do).
+INJURY_FEATURES = {"injury_impact"}
+MIN_READY_GAMES = 2
+
+
+def next_slate(table, season, week, now, pulled_at=None):
+    """The games of (season, week) a run at `now` would choose from, each with
+    injury_report_final -- through predict_week's own selection functions."""
+    from src.predict import injury_readiness
+
+    games = table[(table["season"] == season) & (table["week"] == week)].copy()
+    games["kickoff"] = games["game_id"].map(predict_week.kickoff_utc(games["game_id"]))
+    pending = predict_week.select_pending(games, now)
+    ready = injury_readiness.assess(
+        pending,
+        pd.read_parquet(predict_week.INJURIES),
+        injury_readiness.injuries_pulled_at() if pulled_at is None else pulled_at,
+    )
+    return pending.merge(
+        ready[["game_id", "injury_report_final"]], on="game_id", how="left"
+    )
+
+
+def indistinct_team_features(slate, feature_cols) -> list[str]:
+    """Per-team features with ONE value across every team about to play.
+
+    Compared across TEAMS (home and away pooled), not games, so a one-game slate
+    still has two teams to tell apart. Exempt by name, never by a variance
+    threshold -- a threshold would quietly excuse a genuinely broken feature:
+      GAME_FEATURE_COLS   legitimately constant in most weeks (no neutral site,
+                          no playoff game on the slate);
+      prior_games_played  calendar counters, straight from the schedule. Within
+      rest_days           a week most teams have played as many games, and two
+                          teams that both played last Sunday have the same rest
+                          -- Monday night 2026 week 3, PHI and CHI, 8 days each.
+    """
+    from src.models.common import GAME_FEATURE_COLS
+
+    exempt = set(GAME_FEATURE_COLS) | {
+        f"{side}_{c}"
+        for side in ("home", "away")
+        for c in ("prior_games_played", "rest_days")
+    }
+    bases = sorted({c.split("_", 1)[1] for c in feature_cols if c not in exempt})
+    ready = slate[slate["injury_report_final"].fillna(False).astype(bool)]
+    constant = []
+    for base in bases:
+        games = ready if base in INJURY_FEATURES else slate
+        if base in INJURY_FEATURES and len(games) < MIN_READY_GAMES:
+            continue  # not judged until reports are final for 2+ games
+        teams = pd.concat([games[f"home_{base}"], games[f"away_{base}"]])
+        if teams.nunique(dropna=False) <= 1:
+            constant.append(base)
+    return constant
+
+
+class TestTheIndistinctFeatureCheck:
+    """indistinct_team_features on hand-built slates, at every point in the
+    week the daily pipeline runs. No data needed."""
+
+    COLS = ["home_epa", "away_epa", "home_injury_impact", "away_injury_impact"]
+    CALENDAR = ["home_rest_days", "away_rest_days"]
+
+    @staticmethod
+    def slate(epa, injury, final):
+        """epa, injury: [(home, away), ...] per game; final: per game."""
+        return pd.DataFrame(
+            {
+                "home_epa": [h for h, _ in epa],
+                "away_epa": [a for _, a in epa],
+                "home_injury_impact": [h for h, _ in injury],
+                "away_injury_impact": [a for _, a in injury],
+                "injury_report_final": final,
+            }
+        )
+
+    def test_a_one_game_slate_still_has_two_teams_to_tell_apart(self):
+        s = self.slate([(0.1, -0.2)], [(0.0, 0.0)], [True])  # Monday night
+        assert indistinct_team_features(s, self.COLS) == []
+
+    def test_two_teams_on_the_same_rest_are_not_a_fault(self):
+        s = self.slate([(0.1, -0.2)], [(0.0, 0.0)], [False])
+        s["home_rest_days"] = s["away_rest_days"] = 8  # both played last Sunday
+        assert indistinct_team_features(s, self.COLS + self.CALENDAR) == []
+
+    def test_injuries_are_not_judged_before_the_final_report(self):
+        # Tuesday: no report is final, every injury_impact is zero, correctly
+        s = self.slate([(0.1, -0.2), (0.3, 0.0)], [(0.0, 0.0)] * 2, [False, False])
+        assert indistinct_team_features(s, self.COLS) == []
+
+    def test_a_broken_team_feature_is_still_caught(self):
+        s = self.slate([(0.1, 0.1), (0.1, 0.1)], [(0.2, 0.0)] * 2, [True, True])
+        assert indistinct_team_features(s, self.COLS) == ["epa"]
+
+    def test_injuries_missing_from_final_reports_are_caught(self):
+        s = self.slate([(0.1, -0.2), (0.3, 0.0)], [(0.0, 0.0)] * 2, [True, True])
+        assert indistinct_team_features(s, self.COLS) == ["injury_impact"]
+
+
 @pytest.mark.requires_data
 class TestUpcomingWeekIsPredictable:
     @pytest.fixture(scope="class")
@@ -164,16 +279,12 @@ class TestUpcomingWeekIsPredictable:
     def upcoming(cls):
         from src.models.common import FEATURE_COLS
 
-        table = pd.read_parquet("data/processed/model_table.parquet")
-        table["gameday"] = pd.to_datetime(table["gameday"])
-        unplayed = table[table["home_score"].isna()]
-        if unplayed.empty:
-            pytest.skip("no unplayed games in the table -- season is complete")
-        nxt = unplayed.sort_values("gameday").iloc[0]
-        week = unplayed[
-            (unplayed["season"] == nxt["season"]) & (unplayed["week"] == nxt["week"])
-        ]
-        return table, week, FEATURE_COLS
+        table = predict_week.load_table()
+        now = pd.Timestamp.now(tz="UTC")
+        picked = predict_week.pick_week(table, None, None, now=now)
+        if picked is None:
+            pytest.skip("no game left to kick off -- the season is over")
+        return table, next_slate(table, *picked, now), FEATURE_COLS
 
     def test_every_feature_column_exists(self, upcoming):
         table, _, feature_cols = upcoming
@@ -184,44 +295,31 @@ class TestUpcomingWeekIsPredictable:
             "python -m src.features.build_all"
         )
 
-    def test_no_feature_is_null_for_the_next_unplayed_week(self, upcoming):
+    def test_no_feature_is_null_for_the_games_still_to_play(self, upcoming):
         """The core check. A null here does not crash -- it silently becomes the
         training mean, and the feature stops doing anything."""
-        _, week, feature_cols = upcoming
-        null_rate = week[feature_cols].isna().mean()
+        _, slate, feature_cols = upcoming
+        null_rate = slate[feature_cols].isna().mean()
         broken = null_rate[null_rate > 0]
         assert broken.empty, (
-            f"season {int(week['season'].iloc[0])} week {int(week['week'].iloc[0])} "
+            f"season {int(slate['season'].iloc[0])} week {int(slate['week'].iloc[0])} "
             f"has null features:\n{(broken * 100).round(1).to_string()}\n"
             "These would be silently replaced by the training mean, so every team "
             "gets the same value and the feature contributes nothing to the "
             "forecast. Nothing else would report an error."
         )
 
-    def test_features_actually_vary_across_the_upcoming_matchups(self, upcoming):
-        """Non-null is not enough. A column that is present but constant across
-        all 16 games carries no information about who plays whom -- the same
+    def test_team_features_tell_the_teams_apart(self, upcoming):
+        """Non-null is not enough. A column that is present but identical for
+        every team carries no information about who plays whom -- the same
         silent failure wearing a different disguise."""
-        _, week, feature_cols = upcoming
-        from src.models.common import GAME_FEATURE_COLS
-
-        # Exempt by name, never by a variance threshold -- a threshold would
-        # quietly excuse a genuinely broken team feature too.
-        #   GAME_FEATURE_COLS   legitimately constant in most weeks (no neutral
-        #                       site, no playoff game on the slate).
-        #   prior_games_played  a season-progress counter. Within one week every
-        #                       team has played the same number of games, apart
-        #                       from byes, so near-constant is its correct
-        #                       behaviour rather than a fault.
-        exempt = set(GAME_FEATURE_COLS) | {
-            f"{side}_prior_games_played" for side in ("home", "away")
-        }
-        per_team = [c for c in feature_cols if c not in exempt]
-        constant = [c for c in per_team if week[c].nunique(dropna=False) <= 1]
+        _, slate, feature_cols = upcoming
+        constant = indistinct_team_features(slate, feature_cols)
         assert not constant, (
-            f"these per-team features are identical for every game in "
-            f"season {int(week['season'].iloc[0])} week {int(week['week'].iloc[0])}: "
-            f"{constant}. They cannot be distinguishing the matchups."
+            f"these per-team features have one value for every team still to "
+            f"play in season {int(slate['season'].iloc[0])} week "
+            f"{int(slate['week'].iloc[0])}: {constant}. They cannot be "
+            "distinguishing the matchups."
         )
 
     def test_the_split_efficiency_family_reaches_the_upcoming_week(self, upcoming):
@@ -233,14 +331,14 @@ class TestUpcomingWeekIsPredictable:
         rather than as an anonymous null."""
         from src.models.common import SPLIT_FEATURE_COLS
 
-        _, week, _ = upcoming
+        _, slate, _ = upcoming
         sided = [f"{s}_{c}" for s in ("home", "away") for c in SPLIT_FEATURE_COLS]
-        missing = [c for c in sided if c not in week.columns]
+        missing = [c for c in sided if c not in slate.columns]
         assert not missing, (
             f"{missing} absent -- build_split_efficiency.py did not reach "
             "model_table. Check the join in build_game_features.py."
         )
-        assert not week[sided].isna().any().any(), (
+        assert not slate[sided].isna().any().any(), (
             "the pass/rush split is null for the upcoming week. The backtest "
             "would still pass; only the live forecast is broken."
         )
@@ -451,6 +549,41 @@ class TestTrainingCutoffFollowsPendingGames:
         ]
         assert cutoffs == sorted(cutoffs), f"cutoff went backwards: {cutoffs}"
         assert len(set(cutoffs)) == 3, "later runs are not seeing more history"
+
+    def test_a_game_about_to_kick_off_is_left_as_it_is(self):
+        """Its forecast might not be committed before kickoff."""
+        week = self._week()
+        sunday = pd.Timestamp("2026-09-20T17:00Z")
+        just_before = predict_week.select_pending(
+            week, sunday - pd.Timedelta(minutes=10)
+        )
+        earlier = predict_week.select_pending(week, sunday - pd.Timedelta(minutes=20))
+        assert list(just_before["game_id"]) == ["MON"]
+        assert list(earlier["game_id"]) == ["SUN1", "SUN2", "MON"]
+
+    def test_the_default_week_moves_on_from_a_game_about_to_kick_off(self, monkeypatch):
+        # Monday night is the week's last game; 20 minutes out it is still the
+        # week to run, 10 minutes out it is left alone and the next week is.
+        table = pd.DataFrame(
+            {
+                "game_id": ["MON", "NEXT_THU"],
+                "season": 2026,
+                "week": [2, 3],
+                "gameday": pd.to_datetime(["2026-09-21", "2026-09-24"]),
+                "home_score": [float("nan")] * 2,
+            }
+        )
+        kick = pd.Series(
+            pd.to_datetime(["2026-09-22T00:15Z", "2026-09-25T00:15Z"]),
+            index=["MON", "NEXT_THU"],
+        )
+        monkeypatch.setattr(predict_week, "kickoff_utc", lambda ids: kick)
+        mnf = pd.Timestamp("2026-09-22T00:15Z")
+        pick = lambda before: predict_week.pick_week(  # noqa: E731
+            table, None, None, now=mnf - pd.Timedelta(minutes=before)
+        )
+        assert pick(20) == (2026, 2)
+        assert pick(10) == (2026, 3)
 
     def test_a_fully_played_week_leaves_nothing_pending(self):
         _, n = self._cutoff(self._week(), pd.Timestamp("2026-09-30T00:00Z"))
