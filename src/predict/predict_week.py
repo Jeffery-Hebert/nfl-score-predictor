@@ -307,6 +307,33 @@ def unchanged(path: Path, record: pd.DataFrame) -> bool:
     return True
 
 
+def reproduced(fresh: pd.DataFrame, path: Path) -> set:
+    """Games whose forecast this run reproduced exactly -- every stored column
+    equal apart from RUN_METADATA -- so the row already on file stands, with its
+    ORIGINAL generated_at.
+
+    Per game, not per file. When Monday night's final report arrived on
+    2026-09-27 the whole week was rewritten, and fourteen Sunday forecasts that
+    had not moved by a tenth of a point were restamped with that morning's time,
+    discarding the proof that they existed the day before."""
+    if not path.exists():
+        return set()
+    buf = io.BytesIO()
+    fresh.to_parquet(buf, index=False)
+    new = _canonical(pd.read_parquet(io.BytesIO(buf.getvalue())))
+    old = _canonical(pd.read_parquet(path))
+    if set(new.columns) - set(old.columns):
+        return set()  # a new column: every row is new information
+    cols = [c for c in new.columns if c not in RUN_METADATA]
+    both = new[cols].merge(old[cols], on="game_id", suffixes=("", "__old"))
+    same = pd.Series(True, index=both.index)
+    for c in cols:
+        if c != "game_id":
+            a, b = both[c], both[f"{c}__old"]
+            same &= (a == b) | (a.isna() & b.isna())
+    return set(both.loc[same, "game_id"])
+
+
 def market_reference(game_ids) -> pd.DataFrame:
     """Closing spread/total and the score pair they imply. Reference only."""
     s = pd.read_parquet(SCHEDULES)
@@ -523,6 +550,13 @@ def main(argv=None):
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     path = OUT_DIR / f"{season}_wk{week:02d}.parquet"
+    same = reproduced(out, path)
+    if same:
+        print(
+            f"  {len(same)} forecast(s) reproduced exactly -- kept as first "
+            "recorded, with their original time"
+        )
+        out = out[~out["game_id"].isin(same)]  # the stored rows stand
     out = freeze_started_games(out, path, now)
     out = out.sort_values(["kickoff", "game_id"], na_position="last")
     if unchanged(path, out):

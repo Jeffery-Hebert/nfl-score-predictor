@@ -238,6 +238,26 @@ def test_a_rerun_whose_forecasts_moved_rewrites_the_record(world):
     assert (after["generated_at"].values > before["generated_at"].values).all()
 
 
+def test_only_the_game_that_moved_is_restamped(world):
+    # 2026-09-27: Monday night's final report changed one forecast, and the
+    # whole week was restamped -- fourteen identical Sunday forecasts lost the
+    # proof that they existed a day earlier.
+    pulled(world, pd.Timestamp.now(tz="UTC") + FINAL)
+    predict_week.main(["--season", "2026", "--week", "21"])
+    before = pd.read_parquet(world["out"]).set_index("game_id")
+    table = pd.read_parquet(predict_week.MODEL_TABLE)
+    moved = before.index[0]
+    table.loc[table["game_id"] == moved, FEATURE_COLS] += 5.0  # new information
+    table.to_parquet(predict_week.MODEL_TABLE, index=False)
+    predict_week.main(["--season", "2026", "--week", "21"])
+    after = pd.read_parquet(world["out"]).set_index("game_id")
+    assert after.loc[moved, "generated_at"] > before.loc[moved, "generated_at"]
+    others = before.index.drop(moved)
+    pd.testing.assert_frame_equal(
+        after.loc[others, before.columns], before.loc[others], check_dtype=False
+    )
+
+
 def test_by_default_the_week_is_the_next_one_with_a_game_to_kick_off(world):
     table = predict_week.load_table()
     # Week 20 kicked off eleven days ago. Say its results never arrived: the
