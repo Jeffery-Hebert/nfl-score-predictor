@@ -516,6 +516,18 @@ def verify(path=None, pred_dir=PRED_DIR) -> list[str]:
             if g is None:
                 problems.append(f"{label}: not on the page")
                 continue
+            if pd.notna(r.get("spread_line")) and pd.notna(r.get("market_home")):
+                stored_market = {
+                    "spread": float(r["spread_line"]),
+                    "total": float(r["total_line"]),
+                    "away": round(float(r["market_away"]), DP),
+                    "home": round(float(r["market_home"]), DP),
+                }
+                if g.get("market") != stored_market:
+                    problems.append(
+                        f"{label}: market is {g.get('market')} on the page, "
+                        f"{stored_market} on file"
+                    )
             want = is_provisional(r.get("injury_report_final"))
             if g["provisional"] != want:
                 problems.append(

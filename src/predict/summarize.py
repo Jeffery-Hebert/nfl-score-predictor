@@ -93,15 +93,16 @@ def week_markdown(path) -> str:
     lines = [
         f"### {season} week {week}: {len(df)} games on file",
         "",
-        f"| kickoff | matchup | {comp} | market | model line | spread pick "
-        "| total pick | injury report | forecast made |",
-        "|---|---|---|---|---|---|---|---|---|",
+        f"| kickoff | matchup | {comp} | implied score | market | model line "
+        "| spread pick | total pick | injury report | forecast made |",
+        "|---|---|---|---|---|---|---|---|---|---|",
     ]
     for _, r in df.iterrows():
         cells = [
             et(r["kickoff"]) if pd.notna(r["kickoff"]) else "?",
             f"{r['away_team']} @ {r['home_team']}",
             _pair(r, comp),
+            _pair(r, "market"),
             *lines_and_picks(r, comp),
             "final" if _is_final(r) else "**provisional**",
             et(pd.Timestamp(r["generated_at"])),

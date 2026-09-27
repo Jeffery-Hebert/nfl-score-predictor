@@ -783,3 +783,49 @@ class TestPicksOnThePage:
         page = d / "index.html"
         page.write_text(page.read_text().replace('"team":"DEN"', '"team":"KC"', 1))
         assert any("picks on the page" in p for p in verify(pred_dir=d))
+
+
+# --------------------------------------------------------- implied score --
+
+
+class TestImpliedScore:
+    """The market's line read as a score, beside the forecasts: an over/under
+    of 43.5 with GB favoured by 5.5 implies ATL 19.0 - GB 24.5."""
+
+    def test_it_is_the_line_as_a_score(self, tmp_path):
+        path, actuals = fake_week(tmp_path, "2025-09-06T12:00:00+00:00")
+        w = week_payload(path, actuals, NO_KICKOFFS)
+        for g in w["games"]:
+            m = g["market"]
+            assert m == {"spread": 3.0, "total": 45.0, "away": 21.0, "home": 24.0}
+            assert m["home"] == (m["total"] + m["spread"]) / 2
+            assert m["away"] == (m["total"] - m["spread"]) / 2
+
+    def test_every_stored_implied_score_matches_its_line(self):
+        """Every committed record -- 48 games through week 3 -- stores the
+        implied score its own lines give, to the rounding (quarter points
+        round to a tenth)."""
+        from src.predict.build_report import records
+
+        files = records()
+        assert files, "no committed records"
+        for f in files:
+            df = pd.read_parquet(f).dropna(subset=["spread_line", "total_line"])
+            home = (df["total_line"] + df["spread_line"]) / 2
+            away = (df["total_line"] - df["spread_line"]) / 2
+            assert ((df["market_home"] - home).abs() <= 0.05 + 1e-9).all(), f.name
+            assert ((df["market_away"] - away).abs() <= 0.05 + 1e-9).all(), f.name
+
+    def test_the_verifier_catches_a_wrong_implied_score(self, tmp_path):
+        from src.predict.build_report import verify
+
+        d = ledger_dir(tmp_path)
+        df = pd.read_parquet(d / "2026_wk03.parquet")
+        df["spread_line"], df["total_line"] = 5.5, 43.5
+        df["market_home"], df["market_away"] = 24.5, 19.0
+        df.to_parquet(d / "2026_wk03.parquet", index=False)
+        render(d)
+        assert verify(pred_dir=d) == []
+        page = d / "index.html"
+        page.write_text(page.read_text().replace('"away":19.0', '"away":21.0', 1))
+        assert any("market is" in p for p in verify(pred_dir=d))

@@ -210,7 +210,10 @@ td.final{font-weight:600}
     margin against the sign of the real one. A model can be twenty points off and still
     have called the game, which is why the margin error sits next to the tick rather than
     replacing it.</p>
-    <p><b>Market</b> is the betting line stored with the forecast, as it stood when the
+    <p><b>Implied score</b> is the score the betting line works out to, read like the
+    forecasts beside it: an over/under of 43.5 with GB favoured by 5.5 implies
+    <em>19.0&ndash;24.5</em> (half the total, minus or plus half the spread).
+    <b>Market</b> is the betting line stored with the forecast, as it stood when the
     forecast was made: <em>GB &minus;5.5 &middot; O/U 43.5</em> means GB favoured by 5.5 and
     an over/under of 43.5 points. <b>Model line</b> is the same thing from the combined
     forecast: <em>GB &minus;3.6 &middot; 45.6 pts</em> means it has GB winning by 3.6 and 45.6
@@ -396,7 +399,7 @@ function drawHead(w){
   const cells = [["matchup","Matchup"]];
   if (w.n_graded) cells.push(["final","Final"]);
   MODELS.forEach(([,label]) => cells.push(["", label]));
-  cells.push(["mkt","Market"], ["mkt","Model line"],
+  cells.push(["mkt","Implied score"], ["mkt","Market"], ["mkt","Model line"],
              ["mkt pick","Spread pick"], ["mkt pick","Total pick"]);
   document.getElementById("head").replaceChildren(...cells.map(([cls,label]) => {
     const th = document.createElement("th");
@@ -604,9 +607,17 @@ function resultMark(r){
 // model's numbers take. Everything is computed in build_report.market_picks.
 function marketLines(g){
   const p = g.picks && g.picks[COMP];
+  // The score the line implies, on the same scale as the forecasts beside it:
+  // half the total, minus (away) or plus (home) half the spread.
+  const implied = g.market
+    ? {label: "Implied score", text: `${fmt(g.market.away)}–${fmt(g.market.home)}`,
+       title: `The score the betting line implies, on the same scale as the forecasts: ` +
+              `${g.away} ${fmt(g.market.away)}, ${g.home} ${fmt(g.market.home)} ` +
+              `(half the total, minus or plus half the spread).`}
+    : {label: "Implied score", text: null};
   const none = [["Market"], ["Model line"], ["Spread pick", "pick"], ["Total pick", "pick"]]
     .map(([label, cls]) => ({label, cls, text: null}));
-  if (!p){ none[0].text = "no line"; return none; }
+  if (!p){ none[0].text = "no line"; return [implied, ...none]; }
   const r = (g.pick_results && g.pick_results[COMP]) || {};
   const mkt = favLine(p.market.favorite, p.market.by);
   const mdl = favLine(p.model.favorite, p.model.by);
@@ -641,7 +652,7 @@ function marketLines(g){
              `For any other total: Over if it is below ${fmt(p.model.total)}, Under if above.`});
   } else cells.push({label: "Total pick", cls: "pick", text: "no pick",
     sub: [document.createTextNode("model = market")]});
-  return cells;
+  return [implied, ...cells];
 }
 
 function render(){

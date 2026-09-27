@@ -388,6 +388,7 @@ disk and shows them all, opening on the most recent:
 
   | Column | Reads | Means |
   |---|---|---|
+  | Implied score | `19.0–24.5` | the score that line works out to, read like the forecasts |
   | Market | `GB −5.5 · O/U 43.5` | the line when the forecast was made: GB favoured by 5.5, 43.5 points |
   | Model line | `GB −3.6 · 45.6 pts` | the forecast in the same terms: GB by 3.6, 45.6 points |
   | Spread pick | `ATL +5.5 · edge 1.9` | the side the forecast takes against that line, and the gap in points |

@@ -172,7 +172,7 @@ class TestSummaries:
             line for line in md.splitlines() if line.startswith("| ") and "@" in line
         ]
         assert len(rows) == 3
-        assert "ATL @ GB" in rows[0] and "21.0-24.6" in rows[0]
+        assert "ATL @ GB" in rows[0] and "| 21.0-24.6 | 19.0-24.5 |" in rows[0]
         # market GB -5.5 / 43.5 against the model's GB -3.6 / 45.6
         assert "| GB -5.5 / 43.5 | GB -3.6 / 45.6 |" in rows[0]
         assert "| ATL +5.5 (edge 1.9) | Over 43.5 (edge 2.1) |" in rows[0]

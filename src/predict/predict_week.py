@@ -335,7 +335,8 @@ def reproduced(fresh: pd.DataFrame, path: Path) -> set:
 
 
 def market_reference(game_ids) -> pd.DataFrame:
-    """Closing spread/total and the score pair they imply. Reference only."""
+    """The spread and total in the data when the forecast is made, and the
+    score pair they imply. Reference only -- never a model input."""
     s = pd.read_parquet(SCHEDULES)
     s = s[s["game_id"].isin(game_ids)][
         ["game_id", "gametime", "spread_line", "total_line"]
