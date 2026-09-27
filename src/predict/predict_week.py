@@ -596,8 +596,8 @@ def main(argv=None):
             f"{when:<19}{r['away_team'] + ' @ ' + r['home_team']:<13}{cells}{mk}{flag}"
         )
 
-    print("\nScores shown as away-home. Market column is the CLOSING line's implied")
-    print("score and is reference only -- it is never a model input.")
+    print("\nScores shown as away-home. Market is the score the betting line implied")
+    print("when this forecast was made -- reference only, never a model input.")
     if out["injury_report_final"].map(injury_readiness.is_provisional).any():
         print(
             "*provisional: forecast before the game's final injury report was in the data."

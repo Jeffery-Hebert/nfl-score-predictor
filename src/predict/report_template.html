@@ -120,6 +120,7 @@ td.matchup .dt{display:block;font-family:"IBM Plex Sans",sans-serif;font-size:11
   font-weight:400;color:var(--ink-faint);letter-spacing:0;margin-top:1px}
 td.mkt{background:color-mix(in srgb,var(--accent-soft) 40%,transparent)}
 tbody tr:nth-child(even) td.mkt{background:color-mix(in srgb,var(--accent-soft) 62%,transparent)}
+td.pick{font-weight:600}td.pick .dt{font-weight:400}
 td.final{font-weight:600}
 .err{display:block;font-size:11px;margin-top:2px;letter-spacing:.01em}
 .err.hit{color:var(--hit)}
@@ -209,14 +210,21 @@ td.final{font-weight:600}
     margin against the sign of the real one. A model can be twenty points off and still
     have called the game, which is why the margin error sits next to the tick rather than
     replacing it.</p>
-    <p><b>Vs market</b> is the combined forecast minus the market's: the team it rates
-    higher than the spread does, by how many points, and how far its total sits from the
-    total line. It is a difference, not an edge &mdash; against the closing line this model
-    has been a coin flip.</p>
-    <p><b>The market column is reference only.</b> Betting lines are never an input to
-    any model &#8212; not as a feature, not as a prior, not as a sanity filter. It is the
-    closing line, so a midweek prediction is being shown against a number that kept
-    moving until kickoff.</p>
+    <p><b>Market</b> is the betting line stored with the forecast, as it stood when the
+    forecast was made: <em>GB &minus;5.5 &middot; O/U 43.5</em> means GB favoured by 5.5 and
+    an over/under of 43.5 points. <b>Model line</b> is the same thing from the combined
+    forecast: <em>GB &minus;3.6 &middot; 45.6 pts</em> means it has GB winning by 3.6 and 45.6
+    points in all. Reference only &#8212; betting lines are never an input to any model.</p>
+    <p><b>Spread pick and Total pick</b> are the sides the model's numbers take against that
+    market line. The model has GB winning by less than 5.5, so its spread pick is
+    <em>ATL +5.5</em>; it expects more than 43.5 points, so its total pick is <em>Over
+    43.5</em>. <b>Edge</b> is how far apart the two lines are, in points &#8212; small next
+    to a typical miss of 13 points on a margin. Lines move: set the model line against the
+    line you can actually get, and the pick flips where the line crosses it. Once a game is
+    played each pick is marked won, lost or push, and the record sits at the top.</p>
+    <p><b>These are the model's picks, not advice.</b> Over the whole backtest its spread and
+    total picks have each won about half the time (README section 9), and breaking even at
+    the usual &minus;110 odds takes 52.4%.</p>
     <p><b>Grading never edits a prediction.</b> Each week is written to its own parquet
     the moment it is generated and is read back unchanged; the error columns are computed
     fresh from final scores at render time.</p>
@@ -388,8 +396,8 @@ function drawHead(w){
   const cells = [["matchup","Matchup"]];
   if (w.n_graded) cells.push(["final","Final"]);
   MODELS.forEach(([,label]) => cells.push(["", label]));
-  cells.push(["mkt","Market"]);
-  cells.push(["mkt vs","Vs market"]);
+  cells.push(["mkt","Market"], ["mkt","Model line"],
+             ["mkt pick","Spread pick"], ["mkt pick","Total pick"]);
   document.getElementById("head").replaceChildren(...cells.map(([cls,label]) => {
     const th = document.createElement("th");
     if (cls) th.className = cls;
@@ -437,23 +445,24 @@ function drawBody(w){
     }
     MODELS.forEach(([k]) => tr.append(modelCell(g, k)));
 
-    const mk = document.createElement("td");
-    mk.className = "mkt";
-    if (g.market) mk.textContent = `${fmt(g.market.away)}–${fmt(g.market.home)}`;
-    else { mk.classList.add("dash"); mk.textContent = "no line"; }
-    tr.append(mk);
-
-    const vs = document.createElement("td");
-    vs.className = "mkt vs";
-    const d = vsMarket(g);
-    if (d){
-      vs.append(document.createTextNode(d.side));
-      const t = document.createElement("span");
-      t.className = "dt"; t.textContent = d.total;
-      vs.append(t);
-      vs.title = d.title;
-    } else { vs.classList.add("dash"); vs.textContent = "—"; }
-    tr.append(vs);
+    // Market and model lines, then the side of each bet the model's numbers
+    // take (build_report.market_picks decides; this only formats).
+    const lines = marketLines(g);
+    lines.forEach(({text, sub, title, cls}) => {
+      const td = document.createElement("td");
+      td.className = "mkt" + (cls ? " " + cls : "");
+      if (text === null){ td.classList.add("dash"); td.textContent = "—"; }
+      else {
+        td.append(document.createTextNode(text));
+        if (sub){
+          const s = document.createElement("span");
+          s.className = "dt"; s.append(...sub);
+          td.append(s);
+        }
+        if (title) td.title = title;
+      }
+      tr.append(td);
+    });
     return tr;
   }));
 }
@@ -479,6 +488,13 @@ function careerLines(){
   if (n){
     lines.push(`Combined model, all graded games: ${won}–${n - won} ` +
                `· ${(pts / (2 * n)).toFixed(2)} MAE`);
+    const rec = {spread: {win: 0, loss: 0, push: 0}, total: {win: 0, loss: 0, push: 0}};
+    DATA.weeks.forEach(w => {
+      const pk = w.summary[COMP] && w.summary[COMP].picks;
+      if (pk) ["spread", "total"].forEach(b => ["win", "loss", "push"].forEach(k => rec[b][k] += pk[b][k]));
+    });
+    const wl = b => `${rec[b].win}–${rec[b].loss}` + (rec[b].push ? `–${rec[b].push}` : "");
+    lines.push(`Its picks against the market: spread ${wl("spread")} · total ${wl("total")}`);
     if (back) lines.push(back === n
       ? `All ${n} were backfilled after the fact`
       : `${back} of those ${n} were backfilled after the fact`);
@@ -553,42 +569,79 @@ function drawCards(w){
       c.append(row);
     });
 
-    const row = document.createElement("div");
-    row.className = "grow mk";
-    const kk = document.createElement("span"); kk.className = "k"; kk.textContent = "Market";
-    const vv = document.createElement("span"); vv.className = "v";
-    vv.textContent = g.market ? `${fmt(g.market.away)}–${fmt(g.market.home)}` : "no line";
-    row.append(kk, vv);
-    c.append(row);
-
-    const d = vsMarket(g);
-    if (d){
-      const vr = document.createElement("div");
-      vr.className = "grow mk";
-      const vk = document.createElement("span"); vk.className = "k"; vk.textContent = "Vs market";
-      const vval = document.createElement("span"); vval.className = "v";
-      vval.textContent = `${d.side} · ${d.total}`;
-      vval.title = d.title;
-      vr.append(vk, vval);
-      c.append(vr);
-    }
+    marketLines(g).forEach(({label, text, sub, title}) => {
+      const row = document.createElement("div");
+      row.className = "grow mk";
+      const kk = document.createElement("span"); kk.className = "k"; kk.textContent = label;
+      const vv = document.createElement("span"); vv.className = "v";
+      vv.append(document.createTextNode(text === null ? "—" : text));
+      if (sub){ vv.append(document.createTextNode(" · "), ...sub); }
+      if (title) vv.title = title;
+      row.append(kk, vv);
+      c.append(row);
+    });
     return c;
   }));
 }
 
-// The composite's difference from the market, as computed by
-// build_report.market_difference -- the page only formats it.
-function vsMarket(g){
-  const d = g.vs_market && g.vs_market[COMP];
-  if (!d) return null;
-  const sign = x => (x > 0 ? "+" : x < 0 ? "−" : "±") + fmt(Math.abs(x));
-  return {
-    side: d.side ? `${d.side} +${fmt(Math.abs(d.margin))}` : "side even",
-    total: `total ${sign(d.total)}`,
-    title: `${LABEL[COMP] || COMP} margin minus the spread: ${sign(d.margin)} ` +
-           `(positive = rates the home team higher than the market). ` +
-           `Total minus the total line: ${sign(d.total)}.`,
-  };
+// Betting-line notation. "GB −5.5": GB favoured by 5.5. "ATL +5.5": ATL getting
+// 5.5. "PK": pick'em. A true minus sign, not a hyphen.
+const MINUS = "\u2212";
+const favLine = (team, by) => team ? `${team} ${MINUS}${fmt(by)}` : "PK";
+const teamLine = (team, line) =>
+  line === 0 ? `${team} PK` : `${team} ${line > 0 ? "+" : MINUS}${fmt(Math.abs(line))}`;
+
+function resultMark(r){
+  if (!r) return [];
+  const s = document.createElement("span");
+  s.className = "err " + (r === "win" ? "hit" : r === "loss" ? "miss" : "");
+  s.textContent = r === "win" ? "✓ won" : r === "loss" ? "✗ lost" : "push";
+  return [document.createTextNode(" "), s];
+}
+
+// The composite's lines and picks for one game, as four display cells:
+// what the market says, what the model says, and the side of each bet the
+// model's numbers take. Everything is computed in build_report.market_picks.
+function marketLines(g){
+  const p = g.picks && g.picks[COMP];
+  const none = [["Market"], ["Model line"], ["Spread pick", "pick"], ["Total pick", "pick"]]
+    .map(([label, cls]) => ({label, cls, text: null}));
+  if (!p){ none[0].text = "no line"; return none; }
+  const r = (g.pick_results && g.pick_results[COMP]) || {};
+  const mkt = favLine(p.market.favorite, p.market.by);
+  const mdl = favLine(p.model.favorite, p.model.by);
+  const who = p.model.favorite ? `${p.model.favorite} winning by ${fmt(p.model.by)}` : "a dead heat";
+  const cells = [
+    {label: "Market", text: mkt, sub: [document.createTextNode(`O/U ${fmt(p.market.total)}`)],
+     title: `The betting line when this forecast was made: ${p.market.favorite ? `${p.market.favorite} favoured by ${fmt(p.market.by)}` : "pick'em"}, over/under ${fmt(p.market.total)} points.`},
+    {label: "Model line", text: mdl, sub: [document.createTextNode(`${fmt(p.model.total)} pts`)],
+     title: `The ${LABEL[COMP] || COMP} forecast as a betting line: ${who}, ${fmt(p.model.total)} points in total.`},
+  ];
+  if (p.spread){
+    const s = p.spread;
+    const fav = p.model.favorite, dog = fav === g.home ? g.away : g.home;
+    // The model's number as a rule for ANY line, not just the stored one.
+    const rule = fav
+      ? `Take ${dog} if ${fav} is favoured by more than ${fmt(p.model.by)}; take ${fav} ` +
+        `if ${fav} is favoured by less than ${fmt(p.model.by)} or is the underdog.`
+      : `The model has a dead heat: take whichever team is the underdog.`;
+    cells.push({label: "Spread pick", cls: "pick", text: teamLine(s.team, s.line),
+      sub: [document.createTextNode(`edge ${fmt(s.edge)}`), ...resultMark(r.spread)],
+      title: `Market ${mkt}, model ${mdl}, so against this line the model's side is ` +
+             `${teamLine(s.team, s.line)} (${fmt(s.edge)} points between the two lines). ` +
+             `For any other line: ${rule}`});
+  } else cells.push({label: "Spread pick", cls: "pick", text: "no pick",
+    sub: [document.createTextNode("model = market")]});
+  if (p.total){
+    const t = p.total;
+    cells.push({label: "Total pick", cls: "pick", text: `${t.side} ${fmt(t.line)}`,
+      sub: [document.createTextNode(`edge ${fmt(t.edge)}`), ...resultMark(r.total)],
+      title: `Market total ${fmt(p.market.total)}, model ${fmt(p.model.total)}, so against ` +
+             `this total the model's side is the ${t.side} (${fmt(t.edge)} points apart). ` +
+             `For any other total: Over if it is below ${fmt(p.model.total)}, Under if above.`});
+  } else cells.push({label: "Total pick", cls: "pick", text: "no pick",
+    sub: [document.createTextNode("model = market")]});
+  return cells;
 }
 
 function render(){

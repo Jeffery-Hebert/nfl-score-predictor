@@ -47,6 +47,45 @@ def _num(x) -> str:
     return "--" if pd.isna(x) else f"{x:.1f}"
 
 
+def _fav(team, by) -> str:
+    return f"{team} -{by:.1f}" if team else "PK"
+
+
+def _side(team, line) -> str:
+    return f"{team} PK" if line == 0 else f"{team} {line:+.1f}"
+
+
+def lines_and_picks(r, comp: str):
+    """(market, model line, spread pick, total pick) as text, via the ledger's
+    own market_picks, so the run page and the ledger can never disagree."""
+    from src.predict.build_report import market_picks
+
+    p = market_picks(
+        r.get(f"{comp}_home"),
+        r.get(f"{comp}_away"),
+        r.get("spread_line"),
+        r.get("total_line"),
+        r["home_team"],
+        r["away_team"],
+    )
+    if p is None:
+        return ("no line", "--", "--", "--")
+    return (
+        f"{_fav(p['market']['favorite'], p['market']['by'])} / {p['market']['total']:.1f}",
+        f"{_fav(p['model']['favorite'], p['model']['by'])} / {p['model']['total']:.1f}",
+        (
+            f"{_side(p['spread']['team'], p['spread']['line'])} (edge {p['spread']['edge']:.1f})"
+            if p["spread"]
+            else "none"
+        ),
+        (
+            f"{p['total']['side']} {p['total']['line']:.1f} (edge {p['total']['edge']:.1f})"
+            if p["total"]
+            else "none"
+        ),
+    )
+
+
 def week_markdown(path) -> str:
     df = _record(path)
     comp = live_settings()["composite"]["name"]
@@ -54,25 +93,28 @@ def week_markdown(path) -> str:
     lines = [
         f"### {season} week {week}: {len(df)} games on file",
         "",
-        f"| kickoff | matchup | {comp} | total | market | injury report | forecast made |",
-        "|---|---|---|---|---|---|---|",
+        f"| kickoff | matchup | {comp} | market | model line | spread pick "
+        "| total pick | injury report | forecast made |",
+        "|---|---|---|---|---|---|---|---|---|",
     ]
     for _, r in df.iterrows():
         cells = [
             et(r["kickoff"]) if pd.notna(r["kickoff"]) else "?",
             f"{r['away_team']} @ {r['home_team']}",
             _pair(r, comp),
-            _num(r.get(f"{comp}_total")),
-            _pair(r, "market"),
+            *lines_and_picks(r, comp),
             "final" if _is_final(r) else "**provisional**",
             et(pd.Timestamp(r["generated_at"])),
         ]
         lines.append("| " + " | ".join(cells) + " |")
     lines += [
         "",
-        f"Scores read away-home. `{comp}` is the published forecast. Market is the "
-        "betting line when the forecast was made: reference only, never a model "
-        "input. A provisional row was forecast before its final injury report.",
+        f"Scores read away-home; `{comp}` is the published forecast. Market is the line "
+        "when the forecast was made (GB -5.5 = GB favoured by 5.5); model line is the "
+        "forecast in the same terms; the picks are the sides the forecast takes against "
+        "the market line, and edge is the gap in points. The model's picks, not advice: "
+        "in the backtest they have won about half the time. A provisional row was "
+        "forecast before its final injury report.",
     ]
     return "\n".join(lines)
 
@@ -97,7 +139,9 @@ def commit_message(paths) -> str:
             body.append(
                 f"  {r['away_team']:>3} @ {r['home_team']:<3}  "
                 f"{_pair(r, comp['name']):>11}  total {_num(r.get(comp['name'] + '_total')):>5}"
-                f"   market {_pair(r, 'market'):>11}"
+                f"   market {lines_and_picks(r, comp['name'])[0]:>14}"
+                f"   picks {lines_and_picks(r, comp['name'])[2]}, "
+                f"{lines_and_picks(r, comp['name'])[3]}"
                 + ("" if _is_final(r) else "  (provisional)")
             )
         bodies.append("\n".join(body))

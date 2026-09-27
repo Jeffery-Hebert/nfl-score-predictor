@@ -156,6 +156,8 @@ def record(tmp_path):
             f"{comp}_total": [r[6] for r in rows],
             "market_home": [24.5, 20.0, 18.5],
             "market_away": [19.0, 22.5, 23.0],
+            "spread_line": [5.5, -2.5, float("nan")],
+            "total_line": [43.5, 42.5, float("nan")],
         }
     )
     path = tmp_path / "2026_wk03.parquet"
@@ -170,9 +172,12 @@ class TestSummaries:
             line for line in md.splitlines() if line.startswith("| ") and "@" in line
         ]
         assert len(rows) == 3
-        assert "ATL @ GB" in rows[0] and "21.0-24.6" in rows[0] and "45.6" in rows[0]
-        # a missing number blanks its own cell, never the whole row
-        assert "PHI @ CHI" in rows[2] and "| -- |" in rows[2]
+        assert "ATL @ GB" in rows[0] and "21.0-24.6" in rows[0]
+        # market GB -5.5 / 43.5 against the model's GB -3.6 / 45.6
+        assert "| GB -5.5 / 43.5 | GB -3.6 / 45.6 |" in rows[0]
+        assert "| ATL +5.5 (edge 1.9) | Over 43.5 (edge 2.1) |" in rows[0]
+        # a game without a line blanks its own cells, never the whole row
+        assert "PHI @ CHI" in rows[2] and "| no line |" in rows[2]
         assert "**provisional**" in rows[2] and "provisional" not in rows[0]
 
     def test_the_commit_message_lists_only_this_runs_games(self, record):

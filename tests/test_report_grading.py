@@ -596,65 +596,73 @@ def test_the_committed_ledger_matches_the_committed_records():
     assert verify() == []
 
 
-# ------------------------------------------------------------ vs market --
+# ---------------------------------------------------------- market picks --
 
-# The ledger's "Vs market" column: the combined forecast minus the betting
-# market, as a margin (against the spread) and a total (against the total
-# line). nflverse's spread_line is the HOME team's expected margin, so
-# positive = home favoured -- the sign every case below pins down.
+# The ledger's Market / Model line / Spread pick / Total pick columns. nflverse's
+# spread_line is the HOME team's expected margin (positive = home favoured), so
+# the home team's betting line is -spread_line: every case below pins that down.
 
 
-class TestMarketDifference:
-    @staticmethod
-    def diff(home, away, spread, total, home_team="HOME", away_team="AWAY"):
-        from src.predict.build_report import market_difference
+def picks(home, away, spread, total, home_team="HOME", away_team="AWAY"):
+    from src.predict.build_report import market_picks
 
-        return market_difference(home, away, spread, total, home_team, away_team)
+    return market_picks(home, away, spread, total, home_team, away_team)
 
+
+class TestMarketPicks:
     def test_thursday_night_of_week_3(self):
-        # Combined ATL 21.0 - GB 24.6: GB by 3.6 against GB -5.5, and 45.6
-        # points against 43.5. The model likes ATL 1.9 points more than the
-        # market does, and expects 2.1 more points.
-        assert self.diff(24.6, 21.0, 5.5, 43.5, "GB", "ATL") == {
-            "margin": -1.9,
-            "total": 2.1,
-            "side": "ATL",
+        # Combined ATL 21.0 - GB 24.6 against GB -5.5, O/U 43.5.
+        assert picks(24.6, 21.0, 5.5, 43.5, "GB", "ATL") == {
+            "market": {"favorite": "GB", "by": 5.5, "total": 43.5},
+            "model": {"favorite": "GB", "by": 3.6, "total": 45.6},
+            "spread": {"team": "ATL", "line": 5.5, "edge": 1.9},
+            "total": {"side": "Over", "line": 43.5, "edge": 2.1},
         }
 
-    def test_rating_the_home_team_higher_is_positive(self):
-        # KC by 7 against KC -3, and 47 points against 45.
-        assert self.diff(27.0, 20.0, 3.0, 45.0, "KC", "DEN") == {
-            "margin": 4.0,
-            "total": 2.0,
-            "side": "KC",
-        }
+    def test_a_home_favourite_the_model_likes_more(self):
+        # KC by 7 against KC -3: KC covers, at KC's line -3.
+        p = picks(27.0, 20.0, 3.0, 45.0, "KC", "DEN")
+        assert p["spread"] == {"team": "KC", "line": -3.0, "edge": 4.0}
+        assert p["total"] == {"side": "Over", "line": 45.0, "edge": 2.0}
 
-    def test_an_away_favourite_line(self):
-        # CAR is favoured (spread -2.5); the model has CAR by 2.9 -- 0.4 more.
-        assert self.diff(20.7, 23.6, -2.5, 42.5, "CLE", "CAR") == {
-            "margin": -0.4,
-            "total": 1.8,
-            "side": "CAR",
-        }
+    def test_an_away_favourite(self):
+        # CAR favoured by 2.5 at CLE; the model has CAR by 2.9: CAR -2.5.
+        p = picks(20.7, 23.6, -2.5, 42.5, "CLE", "CAR")
+        assert p["market"]["favorite"] == "CAR" and p["model"]["favorite"] == "CAR"
+        assert p["spread"] == {"team": "CAR", "line": -2.5, "edge": 0.4}
 
-    def test_fewer_points_than_the_market_is_negative(self):
-        assert self.diff(20.1, 22.0, -3.5, 42.5, "PIT", "CIN")["total"] == -0.4
+    def test_a_home_underdog(self):
+        # CIN favoured by 3.5 at PIT; the model has CIN by only 1.9: PIT +3.5.
+        p = picks(20.1, 22.0, -3.5, 42.5, "PIT", "CIN")
+        assert p["spread"] == {"team": "PIT", "line": 3.5, "edge": 1.6}
+        assert p["total"] == {"side": "Under", "line": 42.5, "edge": 0.4}
 
-    def test_agreement_is_zero_and_names_no_side(self):
+    def test_the_model_favouring_the_other_team(self):
+        # Market GB -1.5, model ATL by 2.0: ATL +1.5, 3.5 points apart.
+        p = picks(21.0, 23.0, 1.5, 44.0, "GB", "ATL")
+        assert p["model"] == {"favorite": "ATL", "by": 2.0, "total": 44.0}
+        assert p["spread"] == {"team": "ATL", "line": 1.5, "edge": 3.5}
+        assert p["total"] is None  # 44.0 on a 44.0 line
+
+    def test_a_pickem_line(self):
+        p = picks(24.0, 21.0, 0.0, 45.0, "KC", "DEN")
+        assert p["market"]["favorite"] is None
+        assert p["spread"] == {"team": "KC", "line": 0.0, "edge": 3.0}
+
+    def test_no_pick_when_the_model_sits_on_the_line(self):
         import math
 
-        d = self.diff(24.0, 21.0, 3.0, 45.0)
-        assert d == {"margin": 0.0, "total": 0.0, "side": None}
-        # never "-0.0" on the page
-        assert math.copysign(1, d["margin"]) == 1 and math.copysign(1, d["total"]) == 1
+        p = picks(24.0, 21.0, 3.0, 45.0)
+        assert p["spread"] is None and p["total"] is None
+        assert math.copysign(1, p["model"]["by"]) == 1  # never "-0.0"
 
     @pytest.mark.parametrize("spread, total", [(float("nan"), 43.5), (5.5, None)])
-    def test_no_line_means_no_difference(self, spread, total):
-        assert self.diff(24.6, 21.0, spread, total) is None
+    def test_no_line_means_no_picks(self, spread, total):
+        assert picks(24.6, 21.0, spread, total) is None
 
     def test_float_noise_never_reaches_the_page(self):
         # 3.6 - 5.5 is -1.9000000000000004 in floating point.
-        assert repr(self.diff(24.6, 21.0, 5.5, 43.5)["margin"]) == "-1.9"
+        assert repr(picks(24.6, 21.0, 5.5, 43.5)["spread"]["edge"]) == "1.9"
 
     def test_it_agrees_with_exact_decimal_arithmetic(self):
         from decimal import Decimal
@@ -666,45 +674,103 @@ class TestMarketDifference:
             away = Decimal(rng.randint(50, 400)) / 10
             spread = Decimal(rng.randint(-40, 40)) / 2  # lines: half points
             total = Decimal(rng.randint(60, 120)) / 2
-            want_margin = (home - away) - spread
-            want_total = (home + away) - total
-            d = self.diff(
-                float(home), float(away), float(spread), float(total), "H", "A"
-            )
-            assert Decimal(str(d["margin"])) == want_margin
-            assert Decimal(str(d["total"])) == want_total
-            assert d["side"] == (
-                "H" if want_margin > 0 else "A" if want_margin < 0 else None
-            )
+            p = picks(float(home), float(away), float(spread), float(total), "H", "A")
+            gap, over_by = (home - away) - spread, (home + away) - total
+            if gap == 0:
+                assert p["spread"] is None
+            else:
+                team = "H" if gap > 0 else "A"
+                # the pick's line, seen from its own team, is what it must cover
+                line = -spread if team == "H" else spread
+                assert p["spread"] == {
+                    "team": team,
+                    "line": float(line),
+                    "edge": float(abs(gap)),
+                }
+                # and the model's margin for that team does cover it
+                model_margin = (home - away) if team == "H" else (away - home)
+                assert model_margin + line > 0
+            if over_by == 0:
+                assert p["total"] is None
+            else:
+                assert p["total"]["side"] == ("Over" if over_by > 0 else "Under")
+                assert Decimal(str(p["total"]["edge"])) == abs(over_by)
 
 
-class TestVsMarketOnThePage:
-    def test_every_model_on_the_page_carries_its_difference(self, tmp_path):
-        from src.predict.build_report import market_difference
+class TestPickResults:
+    @staticmethod
+    def result(p, home, away, home_team="HOME"):
+        from src.predict.build_report import grade_picks
+
+        return grade_picks(p, home_team, home, away)
+
+    def test_thursday_night_of_week_3_won_both(self):
+        # ATL +5.5 and Over 43.5; final ATL 35 - GB 14 (49 points).
+        p = picks(24.6, 21.0, 5.5, 43.5, "GB", "ATL")
+        assert self.result(p, 14.0, 35.0, "GB") == {"spread": "win", "total": "win"}
+
+    @pytest.mark.parametrize(
+        "home, away, spread_result, total_result",
+        [
+            (24.0, 20.0, "loss", "loss"),  # GB by 4: covers 5.5? no -> ATL wins
+            (30.0, 20.0, "loss", "win"),  # GB by 10: ATL +5.5 loses; 50 points
+            (20.0, 21.0, "win", "loss"),  # ATL wins outright; 41 points
+        ],
+    )
+    def test_each_outcome(self, home, away, spread_result, total_result):
+        p = picks(24.6, 21.0, 5.5, 43.5, "HOME", "AWAY")  # AWAY +5.5, Over
+        got = self.result(p, home, away)
+        want_spread = "win" if (away - home) + 5.5 > 0 else "loss"
+        assert got["spread"] == want_spread
+        assert got["total"] == ("win" if home + away > 43.5 else "loss")
+
+    def test_landing_on_the_line_is_a_push(self):
+        p = picks(27.0, 20.0, 3.0, 45.0)  # HOME -3, Over 45
+        assert self.result(p, 24.0, 21.0) == {"spread": "push", "total": "push"}
+
+    def test_no_pick_has_no_result(self):
+        p = picks(24.0, 21.0, 3.0, 45.0)
+        assert self.result(p, 30.0, 10.0) == {"spread": None, "total": None}
+
+
+class TestPicksOnThePage:
+    def test_every_game_carries_its_picks_and_graded_games_their_results(
+        self, tmp_path
+    ):
+        from src.predict.build_report import grade_picks, market_picks
 
         path, actuals = fake_week(tmp_path, "2025-09-06T12:00:00+00:00")
         w = week_payload(path, actuals, NO_KICKOFFS)
         for g in w["games"]:
             for m, p in g["models"].items():
-                assert g["vs_market"][m] == market_difference(
+                want = market_picks(
                     p["home"], p["away"], 3.0, 45.0, g["home"], g["away"]
                 )
-        # combined 20-27 against the home side -3 and 45: home +4.0, total +2.0
-        assert w["games"][0]["vs_market"]["combined"] == {
-            "margin": 4.0,
-            "total": 2.0,
-            "side": w["games"][0]["home"],
+                assert g["picks"][m] == want
+                assert g["pick_results"][m] == grade_picks(
+                    want, g["home"], g["actual"]["home"], g["actual"]["away"]
+                )
+        # combined 20-27 against home -3 / 45: home -3 and Over 45.
+        # DEN @ KC ended 17-24 (KC by 7, 41 points): won, lost.
+        # SEA @ SF ended 30-13 (SEA by 17, 43 points): lost, lost.
+        assert [g["pick_results"]["combined"] for g in w["games"]] == [
+            {"spread": "win", "total": "loss"},
+            {"spread": "loss", "total": "loss"},
+        ]
+        assert w["summary"]["combined"]["picks"] == {
+            "spread": {"win": 1, "loss": 1, "push": 0},
+            "total": {"win": 0, "loss": 2, "push": 0},
         }
 
-    def test_a_game_without_a_line_has_none(self, tmp_path):
+    def test_a_game_without_a_line_has_no_picks(self, tmp_path):
         path, actuals = fake_week(tmp_path, "2025-09-06T12:00:00+00:00")
         df = pd.read_parquet(path)
         df["spread_line"] = float("nan")
         df.to_parquet(path, index=False)
         w = week_payload(path, actuals, NO_KICKOFFS)
-        assert all(g["vs_market"] is None for g in w["games"])
+        assert all(g["picks"] is None for g in w["games"])
 
-    def test_the_verifier_recomputes_it_from_the_record(self, tmp_path):
+    def test_the_verifier_recomputes_the_picks_from_the_record(self, tmp_path):
         from src.predict.build_report import verify
 
         d = ledger_dir(tmp_path)
@@ -715,5 +781,5 @@ class TestVsMarketOnThePage:
         render(d)
         assert verify(pred_dir=d) == []
         page = d / "index.html"
-        page.write_text(page.read_text().replace('"margin":-1.9', '"margin":1.9', 1))
-        assert any("vs market" in p for p in verify(pred_dir=d))
+        page.write_text(page.read_text().replace('"team":"DEN"', '"team":"KC"', 1))
+        assert any("picks on the page" in p for p in verify(pred_dir=d))

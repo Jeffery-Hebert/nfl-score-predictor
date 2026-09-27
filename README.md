@@ -383,11 +383,20 @@ which models made it, whether its injury report was final, and the code version.
 The page is not a snapshot of one week. It reads **every** prediction file on
 disk and shows them all, opening on the most recent:
 
-- a week that hasn't been played yet shows the live models' predictions next to
-  the market's implied score, and **Vs market**: the combined forecast minus the
-  betting line -- the team it rates higher than the spread does and by how much,
-  and how far its total sits from the total line (`ATL +1.9 · total +2.1`). A
-  difference, not an edge: against the closing line the model is a coin flip;
+- a week that hasn't been played yet shows the live models' predictions, then
+  four betting columns for the combined forecast:
+
+  | Column | Reads | Means |
+  |---|---|---|
+  | Market | `GB −5.5 · O/U 43.5` | the line when the forecast was made: GB favoured by 5.5, 43.5 points |
+  | Model line | `GB −3.6 · 45.6 pts` | the forecast in the same terms: GB by 3.6, 45.6 points |
+  | Spread pick | `ATL +5.5 · edge 1.9` | the side the forecast takes against that line, and the gap in points |
+  | Total pick | `Over 43.5 · edge 2.1` | likewise for the total |
+
+  Hovering a pick gives the rule for any other line ("take ATL if GB is
+  favoured by more than 3.6"). Played games mark each pick won, lost or push,
+  and the header keeps the running record. These are the model's picks, not
+  advice: in the backtest they have won about half the time;
 - a week that has been played shows the same predictions with the **final score
   beside them**, how far off each model was, and whether it picked the winner;
 - the tab strip along the top pages through every week on file, each tab

@@ -247,11 +247,13 @@ def week_payload(path: Path, actuals: pd.DataFrame, kickoffs: pd.Series) -> dict
                 else None
             ),
         }
-        # The forecast relative to the market, per model shown (the page draws
-        # the composite's). Computed here, not in the page, so it is tested.
-        g["vs_market"] = (
+        # The forecast against the market, per model shown (the page draws the
+        # composite's): both lines and the sides it takes. Computed here, not
+        # in the page, so it is tested -- and graded once the game is played.
+        has_line = pd.notna(r.get("spread_line")) and pd.notna(r.get("total_line"))
+        g["picks"] = (
             {
-                m: market_difference(
+                m: market_picks(
                     v["home"],
                     v["away"],
                     r["spread_line"],
@@ -261,7 +263,7 @@ def week_payload(path: Path, actuals: pd.DataFrame, kickoffs: pd.Series) -> dict
                 )
                 for m, v in models.items()
             }
-            if pd.notna(r.get("spread_line")) and pd.notna(r.get("total_line"))
+            if has_line
             else None
         )
         # Honesty flag, per GAME. A forecast written before its own kickoff is a
@@ -286,6 +288,13 @@ def week_payload(path: Path, actuals: pd.DataFrame, kickoffs: pd.Series) -> dict
         if pd.notna(r.get("act_home")):
             g["actual"] = {"away": float(r["act_away"]), "home": float(r["act_home"])}
             g["grade"] = grade(models, g["actual"])
+            if g["picks"]:
+                g["pick_results"] = {
+                    m: grade_picks(
+                        p, r["home_team"], g["actual"]["home"], g["actual"]["away"]
+                    )
+                    for m, p in g["picks"].items()
+                }
             graded += 1
         games.append(g)
 
@@ -302,6 +311,17 @@ def week_payload(path: Path, actuals: pd.DataFrame, kickoffs: pd.Series) -> dict
                 ),
                 "winners": sum(r["winner_correct"] for r in rows),
                 "n": len(rows),
+                "picks": {
+                    bet: {
+                        k: sum(
+                            1
+                            for g in games
+                            if (g.get("pick_results") or {}).get(m, {}).get(bet) == k
+                        )
+                        for k in ("win", "loss", "push")
+                    }
+                    for bet in ("spread", "total")
+                },
             }
     n_backfilled = sum(g["backfilled"] for g in games)
     return {
@@ -325,29 +345,85 @@ def week_payload(path: Path, actuals: pd.DataFrame, kickoffs: pd.Series) -> dict
     }
 
 
-def market_difference(home, away, spread, total, home_team, away_team):
-    """How far a forecast sits from the betting market, in the market's terms.
+def market_picks(home, away, spread, total, home_team, away_team):
+    """A forecast against the betting market: the two lines side by side, and
+    the side of each bet the forecast takes.
 
-      margin  (home - away) - spread_line. nflverse's spread_line is the HOME
-              team's expected margin (positive = home favoured), so a positive
-              difference means the model rates the home team higher than the
-              market does, a negative one the away team.
-      total   (home + away) - total_line. Positive: the model expects more
-              points than the market.
-      side    the team the model rates higher than the market does, by
-              |margin| points; None when they agree exactly.
+    nflverse's spread_line is the HOME team's expected margin (positive = home
+    favoured), so the home team's betting line is -spread_line and the away
+    team's is +spread_line. The forecast's margin is home - away.
 
-    Rounded to one decimal, like every forecast, so float noise (3.6 - 5.5 =
-    -1.9000000000000004) never reaches the page. None when there is no line.
-    A difference, not an edge: against the closing line the model has been a
-    coin flip (README section 9).
+      market   who the market favours and by how much; its total
+      model    the same, from the forecast: its own line
+      spread   the side whose line the forecast covers -- home if its margin
+               beats the spread, away if it falls short -- at that team's
+               line, and the gap between the two lines in points (the edge).
+               None when the forecast sits exactly on the line.
+      total    Over when the forecast's total is above the line, Under below,
+               with the gap; None when equal.
+
+    Every number rounded to one decimal, so float noise (3.6 - 5.5 =
+    -1.9000000000000004) never reaches the page; +0.0 turns -0.0 into 0.0.
+    None when there is no line. These are the forecast's sides, not advice:
+    in the backtest they have won about half the time (README section 9).
     """
     if any(pd.isna(x) for x in (home, away, spread, total)):
         return None
-    margin = round((float(home) - float(away)) - float(spread), DP) + 0.0
-    diff_total = round((float(home) + float(away)) - float(total), DP) + 0.0
-    side = home_team if margin > 0 else away_team if margin < 0 else None
-    return {"margin": margin, "total": diff_total, "side": side}
+    home, away, spread, total = (float(x) for x in (home, away, spread, total))
+    margin = round(home - away, DP) + 0.0
+    points = round(home + away, DP) + 0.0
+    gap = round(margin - spread, DP) + 0.0  # > 0: the home side covers
+    over_by = round(points - total, DP) + 0.0  # > 0: over
+
+    def favourite(m):
+        return home_team if m > 0 else away_team if m < 0 else None
+
+    team = home_team if gap > 0 else away_team if gap < 0 else None
+    return {
+        "market": {"favorite": favourite(spread), "by": abs(spread), "total": total},
+        "model": {"favorite": favourite(margin), "by": abs(margin), "total": points},
+        "spread": (
+            {
+                "team": team,
+                "line": (-spread if team == home_team else spread) + 0.0,
+                "edge": abs(gap),
+            }
+            if team
+            else None
+        ),
+        "total": (
+            {
+                "side": "Over" if over_by > 0 else "Under",
+                "line": total,
+                "edge": abs(over_by),
+            }
+            if over_by
+            else None
+        ),
+    }
+
+
+def grade_picks(picks, home_team, act_home, act_away) -> dict:
+    """ "win", "loss" or "push" for each side a forecast took, from the final
+    score. A spread pick wins when its team's margin plus its line is above
+    zero; a total pick when the final total lands on its side of the line."""
+    out = {"spread": None, "total": None}
+    if picks is None:
+        return out
+    s = picks["spread"]
+    if s:
+        team_margin = (
+            act_home - act_away if s["team"] == home_team else act_away - act_home
+        )
+        v = round(team_margin + s["line"], DP)
+        out["spread"] = "win" if v > 0 else "loss" if v < 0 else "push"
+    t = picks["total"]
+    if t:
+        v = round((act_home + act_away) - t["line"], DP) * (
+            1 if t["side"] == "Over" else -1
+        )
+        out["total"] = "win" if v > 0 else "loss" if v < 0 else "push"
+    return out
 
 
 def records(pred_dir=PRED_DIR) -> list[Path]:
@@ -458,15 +534,30 @@ def verify(path=None, pred_dir=PRED_DIR) -> list[str]:
                     )
                 if pd.isna(r.get("spread_line")) or pd.isna(r.get("total_line")):
                     continue
-                # Recomputed here from the record, not via market_difference.
+                # Recomputed here from the record, not via market_picks.
                 a_pts, h_pts = stored
-                margin = round(h_pts - a_pts - float(r["spread_line"]), DP)
-                total = round(h_pts + a_pts - float(r["total_line"]), DP)
-                vs = (g.get("vs_market") or {}).get(m) or {}
-                if (vs.get("margin"), vs.get("total")) != (margin, total):
+                spread, total = float(r["spread_line"]), float(r["total_line"])
+                gap = round(h_pts - a_pts - spread, DP)
+                over_by = round(h_pts + a_pts - total, DP)
+                want_team = (
+                    r["home_team"] if gap > 0 else r["away_team"] if gap < 0 else None
+                )
+                want_side = "Over" if over_by > 0 else "Under" if over_by < 0 else None
+                p = (g.get("picks") or {}).get(m) or {}
+                got_team = (p.get("spread") or {}).get("team")
+                got_edge = (p.get("spread") or {}).get("edge", 0.0)
+                got_side = (p.get("total") or {}).get("side")
+                got_tedge = (p.get("total") or {}).get("edge", 0.0)
+                if (got_team, got_edge, got_side, got_tedge) != (
+                    want_team,
+                    abs(gap),
+                    want_side,
+                    abs(over_by),
+                ):
                     problems.append(
-                        f"{label}: {m} vs market is {vs or None} on the page; "
-                        f"the record gives margin {margin:+.1f}, total {total:+.1f}"
+                        f"{label}: {m} picks on the page are {got_team} "
+                        f"({got_edge}) / {got_side} ({got_tedge}); the record gives "
+                        f"{want_team} ({abs(gap)}) / {want_side} ({abs(over_by)})"
                     )
     return problems
 
