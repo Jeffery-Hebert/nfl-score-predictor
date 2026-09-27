@@ -256,10 +256,10 @@ class TestWeekly:
             "src.predict.predict_week",
             "src.predict.build_report",
         ]
-        # every unit test and data check, not only the data checks
-        assert (
-            self.markers(commands.ran) == [weekly.CHECKS] == ["not backtest_artifacts"]
-        )
+        # every unit test and data check, not only the data checks -- except
+        # the committed-page check, which CI owns: this run rebuilds the page.
+        assert self.markers(commands.ran) == [weekly.CHECKS]
+        assert weekly.CHECKS == "not backtest_artifacts and not ledger_sync"
         predict = commands.ran[3]
         assert "--allow-unsettled-injuries" not in predict and "--html" not in predict
 

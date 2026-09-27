@@ -433,3 +433,164 @@ class TestModelsComeFromTheRecords:
             self._week(tmp_path), pd.DataFrame(columns=["game_id"]), NO_KICKOFFS
         )
         assert w["games"][0]["provisional"] is False
+
+
+# ------------------------------------------------ the page and the records --
+
+# 2026-09-27: GitHub's pipeline recorded Sunday's forecasts on their FINAL
+# injury reports, a `git pull` brought them in, and the ledger page -- then an
+# untracked local file nothing had rebuilt -- still tagged them
+# "pre-injury-report". Nothing was miscomputed; the page was showing records
+# that no longer existed. These pin the guarantees added after it: the page is
+# a pure function of its inputs, carries a fingerprint of every record, is
+# verified against them game by game before it is written, and the page in the
+# repository must match the records in the repository.
+
+
+def ledger_dir(tmp_path, final=(False, False)):
+    """A predictions directory with one week of two games."""
+    d = tmp_path / "predictions"
+    d.mkdir()
+    rows = []
+    for (away, home), is_final in zip([("DEN", "KC"), ("SEA", "SF")], final):
+        rows.append(
+            {
+                "game_id": f"2026_03_{away}_{home}",
+                "season": 2026,
+                "week": 3,
+                "gameday": pd.Timestamp("2026-09-27"),
+                "kickoff": pd.Timestamp("2026-09-27T17:00:00", tz="UTC"),
+                "home_team": home,
+                "away_team": away,
+                "combined_home": 24.6,
+                "combined_away": 21.0,
+                "linear_home": 24.9,
+                "linear_away": 20.7,
+                "injury_report_final": is_final,
+                "generated_at": "2026-09-24T22:26:26+00:00",
+                "trained_through": "2026-09-21",
+                "n_training_games": 1992,
+            }
+        )
+    pd.DataFrame(rows).to_parquet(d / "2026_wk03.parquet", index=False)
+    return d
+
+
+def render(d):
+    from src.predict import build_report
+
+    return build_report.render(d, d / "no-schedule.parquet")
+
+
+def rewrite(d, **changes):
+    """Change the record after the page was built, as a later forecast does."""
+    path = d / "2026_wk03.parquet"
+    df = pd.read_parquet(path)
+    for col, value in changes.items():
+        df[col] = value
+    df.to_parquet(path, index=False)
+
+
+class TestTheLedgerMatchesTheRecords:
+    def test_a_fresh_page_verifies(self, tmp_path):
+        from src.predict.build_report import verify
+
+        d = ledger_dir(tmp_path)
+        render(d)
+        assert verify(pred_dir=d) == []
+
+    def test_the_page_is_a_pure_function_of_its_inputs(self, tmp_path):
+        # No build time or other clock in it: the same records give the same
+        # bytes, so the tracked page changes only when they do.
+        d = ledger_dir(tmp_path)
+        render(d)
+        first = (d / "index.html").read_bytes()
+        render(d)
+        assert (d / "index.html").read_bytes() == first
+
+    def test_the_2026_09_27_case_is_caught(self, tmp_path):
+        from src.predict.build_report import verify
+
+        d = ledger_dir(tmp_path, final=(False, False))
+        render(d)
+        rewrite(d, injury_report_final=True, generated_at="2026-09-26T17:23:47+00:00")
+        problems = verify(pred_dir=d)
+        assert "2026_wk03.parquet has changed since the page was built" in problems
+        assert any(
+            "DEN @ KC: page says provisional, the record says final" in p
+            for p in problems
+        )
+
+    def test_a_forecast_the_page_misstates_is_caught(self, tmp_path):
+        from src.predict.build_report import verify
+
+        d = ledger_dir(tmp_path)
+        render(d)
+        page = d / "index.html"
+        page.write_text(page.read_text().replace('"home":24.6', '"home":27.0', 1))
+        assert any("combined is" in p for p in verify(pred_dir=d))
+
+    def test_a_page_that_would_disagree_is_never_written(self, tmp_path, monkeypatch):
+        from src.predict import build_report
+
+        d = ledger_dir(tmp_path)
+        render(d)
+        good = (d / "index.html").read_bytes()
+        real = build_report.week_payload
+
+        def wrong_status(*a, **k):
+            w = real(*a, **k)
+            w["games"][0]["provisional"] = not w["games"][0]["provisional"]
+            return w
+
+        monkeypatch.setattr(build_report, "week_payload", wrong_status)
+        with pytest.raises(RuntimeError, match="would not match the records"):
+            render(d)
+        assert (d / "index.html").read_bytes() == good, "the old page must stay"
+        assert not (d / "index.html.tmp").exists()
+
+    def test_check_reports_a_stale_page_and_fails(self, tmp_path, monkeypatch, capsys):
+        from src.predict import build_report
+
+        d = ledger_dir(tmp_path)
+        render(d)
+        rewrite(d, injury_report_final=True)
+        monkeypatch.setattr(build_report, "PRED_DIR", d)
+        monkeypatch.setattr(build_report, "OUT", d / "index.html")
+        monkeypatch.setattr("sys.argv", ["build_report", "--check"])
+        assert build_report.main() == 1
+        assert "STALE" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    "value, provisional",
+    [
+        (True, False),
+        (False, True),
+        (None, False),  # a week written before the column existed
+        (float("nan"), False),
+        (pd.NA, False),
+        ("False", True),  # bool("False") is True -- read, never truth-tested
+        ("True", False),
+        (0, True),
+        (1, False),
+    ],
+)
+def test_one_reading_of_the_injury_report_flag(value, provisional):
+    import numpy as np
+
+    from src.predict.injury_readiness import is_provisional
+
+    assert is_provisional(value) is provisional
+    if isinstance(value, bool):
+        assert is_provisional(np.bool_(value)) is provisional
+
+
+@pytest.mark.ledger_sync
+def test_the_committed_ledger_matches_the_committed_records():
+    """CI runs this on every push: a commit that changes a record without the
+    page (or the page without the record) fails here, before anyone opens it.
+    Fix: python -m src.predict.build_report, and commit data/predictions/."""
+    from src.predict.build_report import verify
+
+    assert verify() == []

@@ -7,8 +7,12 @@ __pycache__/
 catboost_info/
 .pytest_cache/
 
-# Generated view of a prediction. The .parquet beside it is the record that
+# Generated views of a prediction. The .parquet beside it is the record that
 # matters and IS tracked -- a timestamped, tamper-evident note of what the model
 # said before the games were played, which is the whole point of forward testing.
-# The HTML is a rendering of that record and regenerates with --html.
+# index.html (the ledger) is tracked too, since 2026-09-27: untracked, a `git pull`
+# brought new records but left the page showing the old ones. It is a pure
+# function of the records and results, verified against them on every build, and
+# CI fails if the committed page and records ever disagree.
 data/predictions/*.html
+!data/predictions/index.html

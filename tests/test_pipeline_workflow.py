@@ -103,11 +103,18 @@ class TestTheWorkflow:
         assert phrase in run_text(wf)
         assert phrase in Path("src/weekly.py").read_text()
 
-    def test_only_forecast_records_are_committed(self, wf):
+    def test_records_and_a_verified_ledger_are_all_that_is_committed(self, wf):
         commit = next(
-            s for s in steps(wf) if s.get("name") == "Commit changed forecasts"
+            s
+            for s in steps(wf)
+            if s.get("name", "").startswith("Commit changed forecasts")
         )
-        assert "git add data/predictions/*.parquet" in commit["run"]
+        run = commit["run"]
+        assert "git add data/predictions/*.parquet" in run
+        # the page only goes in once it verifies against the records
+        check = run.index("python -m src.predict.build_report --check")
+        assert check < run.index("git add data/predictions/index.html")
+        assert "git add -A" not in run and "git add ." not in run
         assert (
             "!cancelled()" in commit["if"]
         ), "a valid record must survive a later failure"

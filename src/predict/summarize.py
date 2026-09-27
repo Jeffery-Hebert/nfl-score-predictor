@@ -17,7 +17,7 @@ from pathlib import Path
 import pandas as pd
 
 from src.config import live_settings
-from src.predict.injury_readiness import et
+from src.predict.injury_readiness import et, is_provisional
 
 
 def _record(path) -> pd.DataFrame:
@@ -34,8 +34,7 @@ def _pair(r, prefix: str) -> str:
 
 
 def _is_final(r) -> bool:
-    final = r.get("injury_report_final")
-    return True if pd.isna(final) else bool(final)
+    return not is_provisional(r.get("injury_report_final"))
 
 
 def latest_run(df: pd.DataFrame) -> pd.DataFrame:

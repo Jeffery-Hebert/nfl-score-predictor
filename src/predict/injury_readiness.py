@@ -49,6 +49,24 @@ MIN_SLATE_COVERAGE = 0.5
 TEAM_CODE_MAP = {"OAK": "LV"}
 
 
+def is_provisional(final) -> bool:
+    """Whether a record's injury_report_final value marks its forecast as made
+    BEFORE the game's final injury report.
+
+    The one reading of that column, used by every place that shows it: the
+    ledger page, its verifier, the run summary and predict_week's table. Only an
+    explicit "not final" counts. A missing value -- a week written before the
+    column existed -- is not provisional; it is unknown, and is shown untagged
+    rather than smeared. Strings are read, not truth-tested: bool("False") is
+    True in Python.
+    """
+    if final is None or (not isinstance(final, str) and pd.isna(final)):
+        return False
+    if isinstance(final, str):
+        return final.strip().lower() in ("false", "0", "no")
+    return not bool(final)
+
+
 def et(ts: pd.Timestamp) -> str:
     """'Fri Sep 25 4:00pm ET' -- portable (no platform-specific strftime flags)."""
     t = pd.Timestamp(ts).tz_convert("US/Eastern")

@@ -19,6 +19,7 @@ import pandas as pd
 import pytest
 
 from src.features.build_injury_features import (
+    team_totals,
     QB_STARTER_SNAP_THRESHOLD,
     attach_prior_share,
     snap_history,
@@ -141,3 +142,29 @@ def test_built_features_are_sane():
         "2025+ rows carry no injury signal -- the NaT-timestamp rows were "
         "probably dropped again"
     )
+
+
+def test_team_totals_do_not_depend_on_row_order():
+    """A pull that only reorders the injury file must leave every total
+    bitwise identical, or the content fingerprints report history as changed.
+    These eleven impacts (one team's report) sum to 2.66503 in one order and
+    2.6650300000000002 in another under an unordered groupby -- found by
+    search, since pandas' compensated summation hides it on small groups."""
+    impacts = [0.220185, 0.13908, 0.1101, 0.071595, 0.224955, 0.04252,
+               0.09303, 0.9951, 0.332115, 0.0575, 0.37885]  # fmt: skip
+    rows = pd.DataFrame(
+        {
+            "game_id": ["g1"] * 11 + ["g2"],
+            "team": ["AAA"] * 11 + ["BBB"],
+            "gsis_id": [f"p{i}" for i in range(12)],
+            "impact": impacts + [0.5],
+            "is_qb_out": [False] * 10 + [True, False],
+        }
+    )
+    reference = team_totals(rows)
+    for seed in range(50):
+        shuffled = rows.sample(frac=1, random_state=seed)
+        pd.testing.assert_frame_equal(
+            team_totals(shuffled), reference, check_exact=True
+        )
+    assert reference["qb_out"].tolist() == [1.0, 0.0]

@@ -328,7 +328,7 @@ python -m src.ingest.pull_all              # pull + validate (or --check-only)
 python -m src.features.build_all           # all 11 feature stages, in order
 pytest tests/ -m "not backtest_artifacts"   # every test that needs no backtest
 python -m src.predict.predict_week --dry-run   # what is ready to forecast, and why
-python -m src.predict.predict_week --html      # forecast what is ready + the ledger
+python -m src.predict.predict_week            # forecast what is ready (+ rebuilds the ledger)
 python -m src.predict.build_report         # re-grade the ledger only (1 second)
 ```
 
@@ -362,12 +362,12 @@ allowed there. The config is checked before anything is fitted.
 Everything above scores the past. This predicts the future.
 
 ```bash
-python -m src.predict.predict_week --html
+python -m src.predict.predict_week
 ```
 
 That fits the live models on every completed game before the first game it is
 forecasting, predicts every game whose final injury report is in, prints a
-table, and writes:
+table, rebuilds the ledger page, and writes:
 
 ```
 data/predictions/2026_wk03.parquet   this week's forecasts, one file per week
@@ -417,15 +417,31 @@ untouched rather than rewriting it. So a week is routinely part pre-registered
 and part not, and saying which games were late beats condemning the whole
 slate.
 
-Rebuild the page any time new results land, without re-predicting anything:
+**The page always matches the records.** `data/predictions/index.html` is
+tracked in git next to the records and committed with them by the pipeline, so
+a `git pull` brings a page that shows exactly what the records say. (Until
+2026-09-27 it was a local file only a local run rebuilt: a pull brought Sunday's
+forecasts in as *final* while the page still tagged them *pre-injury-report*.)
+Three guarantees keep it honest:
+
+- it embeds a fingerprint of every record it was built from, and is checked
+  against them game by game (forecasts and injury-report status) before it is
+  written, so a page that disagrees with the records is never produced;
+- it contains no build time, so the same records and results always give the
+  same file, and the committed page changes only when they do;
+- CI fails any push where the committed page and records disagree.
+
+Rebuild it any time new results land, or check whether the copy you have is
+current, without re-predicting anything:
 
 ```bash
-python -m src.predict.build_report
+python -m src.predict.build_report          # rebuild (about a second)
+python -m src.predict.build_report --check  # exit 1 if it does not match the records
 ```
 
-That takes about a second, because it only re-reads files. Re-running
-`predict_week` is the slow part (it refits every model, roughly 40 seconds) and
-is only needed when you want a *new* week predicted.
+`predict_week` rebuilds it automatically whenever it writes a record. Running
+it is the slow part (it refits every model, roughly 40 seconds) and is only
+needed when you want a *new* week predicted.
 
 ### Viewing it
 
@@ -496,7 +512,8 @@ data/
   raw/         downloaded data (not in git); _pull_manifest.json says when
   processed/   built features, backtests, logs and reports (not in git)
   predictions/ one parquet per predicted week — IN git on purpose, as a dated
-               record of what was claimed before kickoff. index.html is not.
+               record of what was claimed before kickoff — and index.html, the
+               ledger page, verified against those records on every build
 ```
 
 Two conventions worth knowing:
@@ -613,7 +630,7 @@ nothing, and can never beat Vegas. Odds are used only as a scoreboard.
 
 ## 8. Testing philosophy
 
-About 670 tests (run `pytest --co -q` for the current count), in five layers.
+About 725 tests (run `pytest --co -q` for the current count), in five layers.
 CI runs every test that does not need `data/` on each push; the rest run
 locally after a build.
 

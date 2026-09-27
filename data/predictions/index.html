@@ -1,0 +1,577 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>body{margin:0}img{max-width:100%}[hidden]{display:none!important}</style>
+</head>
+<body>
+<title>NFL Score Ledger</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+:root{
+  --ground:#F4F6F8; --surface:#FFFFFF; --surface-2:#EDF0F4;
+  --ink:#141821; --ink-soft:#5B6575; --ink-faint:#8A94A3;
+  --rule:#DCE1E8; --rule-soft:#E8ECF1;
+  --accent:#B06E00; --accent-soft:#F5E4C4;
+  --hit:#0F6E62; --miss:#A8442A;
+  --shadow:0 1px 2px rgba(20,24,33,.06);
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --ground:#10141A; --surface:#161B23; --surface-2:#1D242E;
+    --ink:#E8ECF2; --ink-soft:#9AA5B4; --ink-faint:#6C7788;
+    --rule:#262F3B; --rule-soft:#1F2731;
+    --accent:#F0B429; --accent-soft:#3A2F14;
+    --hit:#3FBFAC; --miss:#E2765A;
+    --shadow:0 1px 2px rgba(0,0,0,.4);
+  }
+}
+:root[data-theme="dark"]{
+  --ground:#10141A; --surface:#161B23; --surface-2:#1D242E;
+  --ink:#E8ECF2; --ink-soft:#9AA5B4; --ink-faint:#6C7788;
+  --rule:#262F3B; --rule-soft:#1F2731;
+  --accent:#F0B429; --accent-soft:#3A2F14;
+  --hit:#3FBFAC; --miss:#E2765A;
+  --shadow:0 1px 2px rgba(0,0,0,.4);
+}
+*{box-sizing:border-box}
+body{
+  background:var(--ground); color:var(--ink);
+  font-family:"IBM Plex Sans",system-ui,-apple-system,sans-serif;
+  margin:0; padding-inline:20px; padding-block:0;
+  -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:1180px;margin:0 auto;padding-block:40px 64px}
+
+/* masthead */
+.mast{display:flex;flex-wrap:wrap;align-items:flex-end;gap:20px;
+  border-bottom:2px solid var(--ink);padding-bottom:14px}
+.mast h1{
+  font-family:"Barlow Condensed",system-ui,sans-serif;
+  font-weight:700;font-size:clamp(32px,6vw,52px);line-height:.95;
+  letter-spacing:-.01em;margin:0;text-wrap:balance;text-transform:uppercase;
+}
+.mast h1 em{font-style:normal;color:var(--accent)}
+.mast .sub{font-size:13px;color:var(--ink-soft);margin-left:auto;text-align:right;line-height:1.5}
+
+/* week rail */
+.rail{display:flex;gap:0;overflow-x:auto;border-bottom:1px solid var(--rule);
+  scrollbar-width:thin;padding-bottom:0}
+.rail button{
+  appearance:none;background:none;border:0;border-bottom:3px solid transparent;
+  font-family:"Barlow Condensed",sans-serif;font-weight:600;font-size:17px;
+  letter-spacing:.02em;text-transform:uppercase;color:var(--ink-faint);
+  padding:12px 15px 9px;cursor:pointer;white-space:nowrap;line-height:1.15;
+  display:flex;flex-direction:column;align-items:center;gap:2px;flex:0 0 auto;
+}
+.rail button:hover{color:var(--ink)}
+.rail button[aria-current="true"]{color:var(--ink);border-bottom-color:var(--accent)}
+.rail button:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+.rail button.season-break{border-left:1px solid var(--rule);margin-left:6px;padding-left:15px}
+.rail .rec{font-family:"IBM Plex Mono",monospace;font-size:10px;font-weight:500;
+  letter-spacing:0;text-transform:none;font-variant-numeric:tabular-nums;color:var(--ink-faint)}
+.rail button[aria-current="true"] .rec{color:var(--accent)}
+.rail .rec.pend{font-style:italic}
+
+/* provenance */
+.prov{display:flex;flex-wrap:wrap;gap:0;border-bottom:1px solid var(--rule);
+  margin-bottom:24px;padding-top:4px}
+.prov div{padding:11px 22px 11px 0;margin-right:22px;border-right:1px solid var(--rule-soft)}
+.prov div:last-child{border-right:0;margin-right:0}
+.prov dt{font-size:10px;letter-spacing:.11em;text-transform:uppercase;color:var(--ink-faint);
+  font-weight:600;margin:0 0 3px}
+.prov dd{margin:0;font-family:"IBM Plex Mono",monospace;font-size:14px;font-weight:500;
+  font-variant-numeric:tabular-nums}
+
+.lede{max-width:66ch;font-size:15px;line-height:1.65;color:var(--ink-soft);margin:0 0 26px}
+.lede strong{color:var(--ink);font-weight:600}
+
+.flag{border-left:3px solid var(--accent);background:var(--accent-soft);
+  padding:11px 16px;margin:0 0 24px;font-size:13.5px;line-height:1.55;color:var(--ink);
+  max-width:72ch;border-radius:0 3px 3px 0}
+.flag b{font-weight:600}
+
+/* week scorecard */
+.card{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:1px;
+  background:var(--rule);border:1px solid var(--rule);margin:0 0 26px;border-radius:3px;
+  overflow:hidden}
+.card section{background:var(--surface);padding:14px 16px 15px}
+.card h3{font-family:"Barlow Condensed",sans-serif;text-transform:uppercase;
+  letter-spacing:.06em;font-size:13px;font-weight:600;margin:0 0 8px;color:var(--ink-soft)}
+.card .big{font-family:"IBM Plex Mono",monospace;font-size:25px;font-weight:600;
+  font-variant-numeric:tabular-nums;line-height:1;margin-bottom:5px}
+.card .note{font-size:11.5px;color:var(--ink-faint);line-height:1.4}
+.card section.best h3{color:var(--accent)}
+
+/* table */
+.scroll{overflow-x:auto;border:1px solid var(--rule);border-radius:3px;background:var(--surface);
+  box-shadow:var(--shadow)}
+table{border-collapse:collapse;width:100%;min-width:900px}
+thead th{
+  font-size:10px;letter-spacing:.11em;text-transform:uppercase;color:var(--ink-faint);
+  font-weight:600;text-align:center;padding:13px 10px 9px;border-bottom:1px solid var(--rule);
+  white-space:nowrap;background:var(--surface-2);
+}
+thead th.matchup{text-align:left;padding-left:18px}
+thead th.mkt{background:var(--accent-soft);color:var(--ink-soft)}
+thead th.final{color:var(--ink)}
+tbody td{padding:11px 10px;border-bottom:1px solid var(--rule-soft);text-align:center;
+  font-family:"IBM Plex Mono",monospace;font-variant-numeric:tabular-nums;font-size:15px}
+tbody tr:last-child td{border-bottom:0}
+tbody tr:nth-child(even) td{background:color-mix(in srgb,var(--surface-2) 45%,transparent)}
+td.matchup{text-align:left;padding-left:18px;font-family:"Barlow Condensed",sans-serif;
+  font-size:19px;font-weight:600;letter-spacing:.01em;white-space:nowrap}
+td.matchup .dt{display:block;font-family:"IBM Plex Sans",sans-serif;font-size:11px;
+  font-weight:400;color:var(--ink-faint);letter-spacing:0;margin-top:1px}
+td.mkt{background:color-mix(in srgb,var(--accent-soft) 40%,transparent)}
+tbody tr:nth-child(even) td.mkt{background:color-mix(in srgb,var(--accent-soft) 62%,transparent)}
+td.final{font-weight:600}
+.err{display:block;font-size:11px;margin-top:2px;letter-spacing:.01em}
+.err.hit{color:var(--hit)}
+.err.miss{color:var(--miss)}
+.dash{color:var(--ink-faint)}
+.late{display:inline-block;margin-left:7px;padding:0 5px;border-radius:2px;
+  background:var(--accent-soft);color:var(--ink-soft);font-size:9.5px;font-weight:600;
+  letter-spacing:.07em;text-transform:uppercase;vertical-align:1px;
+  font-family:"IBM Plex Sans",sans-serif}
+
+/* phone layout -- the graded table is seven columns wide and sideways
+   scrolling to read a score is miserable, so narrow screens get one card
+   per game instead */
+.cards{display:none;flex-direction:column;gap:10px}
+.gcard{background:var(--surface);border:1px solid var(--rule);border-radius:3px;
+  padding:13px 15px;box-shadow:var(--shadow)}
+.gcard h3{font-family:"Barlow Condensed",sans-serif;font-size:21px;font-weight:600;
+  margin:0;letter-spacing:.01em}
+.gcard .when{font-size:11px;color:var(--ink-faint);margin-bottom:10px}
+.gcard .fin{font-family:"IBM Plex Mono",monospace;font-size:19px;font-weight:600;
+  font-variant-numeric:tabular-nums;margin:0 0 10px;padding-bottom:9px;
+  border-bottom:1px solid var(--rule)}
+.gcard .fin span{font-size:10px;letter-spacing:.11em;text-transform:uppercase;
+  color:var(--ink-faint);font-weight:600;font-family:"IBM Plex Sans",sans-serif;
+  margin-right:9px;vertical-align:1px}
+.grow{display:flex;justify-content:space-between;align-items:baseline;gap:10px;
+  padding:5px 0;border-bottom:1px solid var(--rule-soft)}
+.grow:last-child{border-bottom:0}
+.grow .k{font-size:11px;letter-spacing:.09em;text-transform:uppercase;
+  color:var(--ink-faint);font-weight:600}
+.grow .v{font-family:"IBM Plex Mono",monospace;font-variant-numeric:tabular-nums;
+  font-size:15px;font-weight:500;text-align:right}
+.grow .v .err{display:inline;margin-left:7px;font-size:11px}
+.grow.mk{background:color-mix(in srgb,var(--accent-soft) 40%,transparent);
+  margin:7px -15px -13px;padding:9px 15px;border-bottom:0;border-radius:0 0 2px 2px}
+
+.foot{margin-top:30px;padding-top:18px;border-top:1px solid var(--rule);
+  font-size:12.5px;line-height:1.6;color:var(--ink-faint);max-width:78ch}
+.foot p{margin:0 0 9px}
+.foot code{font-family:"IBM Plex Mono",monospace;font-size:12px;
+  background:var(--surface-2);padding:1px 5px;border-radius:2px;color:var(--ink-soft)}
+
+@media (max-width:760px){
+  .scroll{display:none}
+  .cards{display:flex}
+  .mast .sub{margin-left:0;text-align:left;width:100%}
+  .prov div{padding-right:16px;margin-right:16px}
+}
+@media (max-width:640px){
+  .wrap{padding-block:26px 44px}
+}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style>
+
+<div class="wrap">
+  <header class="mast">
+    <h1>NFL Score <em>Ledger</em></h1>
+    <div class="sub" id="sub"></div>
+  </header>
+
+  <nav class="rail" id="rail" aria-label="Week"></nav>
+
+  <dl class="prov" id="prov"></dl>
+
+  <p class="lede" id="lede"></p>
+  <div id="flag"></div>
+  <div class="card" id="card"></div>
+
+  <div class="scroll">
+    <table>
+      <thead><tr id="head"></tr></thead>
+      <tbody id="body"></tbody>
+    </table>
+  </div>
+
+  <div class="cards" id="cards"></div>
+
+  <div class="foot">
+    <p><b>Scores read away&#8211;home</b>, rounded to one decimal. The models predict
+    two point totals; margin and total fall out of those.</p>
+    <p><b>A winning record here is not an edge.</b> Straight-up, the favourite wins
+    roughly two NFL games in three, so a model picking 60% of winners has done nothing
+    the closing line hadn't already told you. The number that would matter for betting is
+    performance against the <em>spread</em>, and there this model sits at a coin flip.
+    These grades measure whether it predicts scores, not whether it beats a market.</p>
+    <p><b>&#10003; and &#10007; grade the winner only</b> &#8212; the sign of the predicted
+    margin against the sign of the real one. A model can be twenty points off and still
+    have called the game, which is why the margin error sits next to the tick rather than
+    replacing it.</p>
+    <p><b>The market column is reference only.</b> Betting lines are never an input to
+    any model &#8212; not as a feature, not as a prior, not as a sanity filter. It is the
+    closing line, so a midweek prediction is being shown against a number that kept
+    moving until kickoff.</p>
+    <p><b>Grading never edits a prediction.</b> Each week is written to its own parquet
+    the moment it is generated and is read back unchanged; the error columns are computed
+    fresh from final scores at render time.</p>
+    <p><b>Weekly error is reported as MAE</b>, the plain average of how far each
+    prediction landed from the final score. The project's headline number elsewhere is
+    RMSE, which squares the misses first &#8212; useful over 1,400 games, misleading over
+    sixteen, where one blowout would swamp the other fifteen results.</p>
+    <p><b>Pre-injury-report</b> marks a forecast written before that game's final injury
+    report (Wednesday for Thursday games, Friday for Sunday, Saturday for Monday) was in
+    the data. The model's injury signal was mostly missing, so treat it as provisional.</p>
+    <p>Regenerate after new results land: <code>python -m src.predict.build_report</code></p>
+  </div>
+</div>
+
+<script>
+const DATA = {"records":{"2026_wk01.parquet":"5edf5fce918d3713e3178b0aa5586fc2f843ebc658d92bd02292c6f742624539","2026_wk02.parquet":"1a57e98c9ab8f1947417f4f9317b0ea147405aa51ab4159001f967ce427b6c46","2026_wk03.parquet":"2461d386ee5e184a8c1382f1357a069fd5520d88d14073afae168aae8e411cb2"},"forecasts_as_of":"2026-09-26T17:23:47.865979+00:00","results_through":"2026-09-24","models":[["combined","Combined"],["poisson","Poisson"],["gp","Gauss. Proc."],["linear","Linear"]],"composite":"combined","weeks":[{"models":["linear","poisson","gp","combined"],"n_provisional":0,"season":2026,"week":1,"trained_through":"2026-02-08","n_training_games":1960,"generated_at":"2026-09-16T00:08:57.198575+00:00","n_backfilled":16,"n_backfilled_graded":16,"backfilled":true,"n_graded":16,"summary":{"linear":{"mae":9.0,"margin_mae":12.23,"winners":8,"n":16},"poisson":{"mae":9.01,"margin_mae":12.29,"winners":8,"n":16},"gp":{"mae":8.97,"margin_mae":12.15,"winners":7,"n":16},"combined":{"mae":8.99,"margin_mae":12.21,"winners":8,"n":16}},"games":[{"away":"NE","home":"SEA","kickoff":"2026-09-09","kickoff_ts":"2026-09-10T00:20:00+00:00","models":{"linear":{"away":21.2,"home":26.4},"poisson":{"away":21.0,"home":26.7},"gp":{"away":21.3,"home":27.2},"combined":{"away":21.2,"home":26.8}},"market":{"spread":3.0,"total":44.5,"away":20.8,"home":23.8},"backfilled":true,"provisional":false,"actual":{"away":10.0,"home":13.0},"grade":{"linear":{"err_home":13.4,"err_away":11.2,"abs_total":24.6,"margin_err":2.2,"winner_correct":true},"poisson":{"err_home":13.7,"err_away":11.0,"abs_total":24.7,"margin_err":2.7,"winner_correct":true},"gp":{"err_home":14.2,"err_away":11.3,"abs_total":25.5,"margin_err":2.9,"winner_correct":true},"combined":{"err_home":13.8,"err_away":11.2,"abs_total":25.0,"margin_err":2.6,"winner_correct":true}}},{"away":"SF","home":"LA","kickoff":"2026-09-10","kickoff_ts":"2026-09-11T00:35:00+00:00","models":{"linear":{"away":23.2,"home":26.1},"poisson":{"away":23.3,"home":26.2},"gp":{"away":22.0,"home":25.8},"combined":{"away":22.8,"home":26.0}},"market":{"spread":3.5,"total":47.5,"away":22.0,"home":25.5},"backfilled":true,"provisional":false,"actual":{"away":27.0,"home":7.0},"grade":{"linear":{"err_home":19.1,"err_away":-3.8,"abs_total":22.9,"margin_err":22.9,"winner_correct":false},"poisson":{"err_home":19.2,"err_away":-3.7,"abs_total":22.9,"margin_err":22.9,"winner_correct":false},"gp":{"err_home":18.8,"err_away":-5.0,"abs_total":23.8,"margin_err":23.8,"winner_correct":false},"combined":{"err_home":19.0,"err_away":-4.2,"abs_total":23.2,"margin_err":23.2,"winner_correct":false}}},{"away":"ATL","home":"PIT","kickoff":"2026-09-13","kickoff_ts":"2026-09-13T17:00:00+00:00","models":{"linear":{"away":18.1,"home":25.8},"poisson":{"away":17.7,"home":25.8},"gp":{"away":17.8,"home":25.5},"combined":{"away":17.9,"home":25.7}},"market":{"spread":6.5,"total":40.5,"away":17.0,"home":23.5},"backfilled":true,"provisional":false,"actual":{"away":13.0,"home":20.0},"grade":{"linear":{"err_home":5.8,"err_away":5.1,"abs_total":10.9,"margin_err":0.7,"winner_correct":true},"poisson":{"err_home":5.8,"err_away":4.7,"abs_total":10.5,"margin_err":1.1,"winner_correct":true},"gp":{"err_home":5.5,"err_away":4.8,"abs_total":10.3,"margin_err":0.7,"winner_correct":true},"combined":{"err_home":5.7,"err_away":4.9,"abs_total":10.6,"margin_err":0.8,"winner_correct":true}}},{"away":"BAL","home":"IND","kickoff":"2026-09-13","kickoff_ts":"2026-09-13T17:00:00+00:00","models":{"linear":{"away":24.7,"home":24.2},"poisson":{"away":24.9,"home":24.1},"gp":{"away":24.5,"home":24.6},"combined":{"away":24.7,"home":24.3}},"market":{"spread":-3.0,"total":48.5,"away":25.8,"home":22.8},"backfilled":true,"provisional":false,"actual":{"away":41.0,"home":23.0},"grade":{"linear":{"err_home":1.2,"err_away":-16.3,"abs_total":17.5,"margin_err":17.5,"winner_correct":true},"poisson":{"err_home":1.1,"err_away":-16.1,"abs_total":17.2,"margin_err":17.2,"winner_correct":true},"gp":{"err_home":1.6,"err_away":-16.5,"abs_total":18.1,"margin_err":18.1,"winner_correct":false},"combined":{"err_home":1.3,"err_away":-16.3,"abs_total":17.6,"margin_err":17.6,"winner_correct":true}}},{"away":"BUF","home":"HOU","kickoff":"2026-09-13","kickoff_ts":"2026-09-13T17:00:00+00:00","models":{"linear":{"away":23.2,"home":23.6},"poisson":{"away":23.1,"home":23.6},"gp":{"away":22.9,"home":23.0},"combined":{"away":23.1,"home":23.4}},"market":{"spread":-1.5,"total":44.5,"away":23.0,"home":21.5},"backfilled":true,"provisional":false,"actual":{"away":36.0,"home":31.0},"grade":{"linear":{"err_home":-7.4,"err_away":-12.8,"abs_total":20.2,"margin_err":5.4,"winner_correct":false},"poisson":{"err_home":-7.4,"err_away":-12.9,"abs_total":20.3,"margin_err":5.5,"winner_correct":false},"gp":{"err_home":-8.0,"err_away":-13.1,"abs_total":21.1,"margin_err":5.1,"winner_correct":false},"combined":{"err_home":-7.6,"err_away":-12.9,"abs_total":20.5,"margin_err":5.3,"winner_correct":false}}},{"away":"CHI","home":"CAR","kickoff":"2026-09-13","kickoff_ts":"2026-09-13T17:00:00+00:00","models":{"linear":{"away":23.9,"home":22.0},"poisson":{"away":23.7,"home":21.9},"gp":{"away":23.7,"home":21.8},"combined":{"away":23.8,"home":21.9}},"market":{"spread":-3.0,"total":47.5,"away":25.2,"home":22.2},"backfilled":true,"provisional":false,"actual":{"away":59.0,"home":37.0},"grade":{"linear":{"err_home":-15.0,"err_away":-35.1,"abs_total":50.1,"margin_err":20.1,"winner_correct":true},"poisson":{"err_home":-15.1,"err_away":-35.3,"abs_total":50.4,"margin_err":20.2,"winner_correct":true},"gp":{"err_home":-15.2,"err_away":-35.3,"abs_total":50.5,"margin_err":20.1,"winner_correct":true},"combined":{"err_home":-15.1,"err_away":-35.2,"abs_total":50.3,"margin_err":20.1,"winner_correct":true}}},{"away":"CLE","home":"JAX","kickoff":"2026-09-13","kickoff_ts":"2026-09-13T17:00:00+00:00","models":{"linear":{"away":16.9,"home":27.2},"poisson":{"away":17.1,"home":27.6},"gp":{"away":16.5,"home":27.5},"combined":{"away":16.8,"home":27.4}},"market":{"spread":8.5,"total":40.5,"away":16.0,"home":24.5},"backfilled":true,"provisional":false,"actual":{"away":10.0,"home":34.0},"grade":{"linear":{"err_home":-6.8,"err_away":6.9,"abs_total":13.7,"margin_err":-13.7,"winner_correct":true},"poisson":{"err_home":-6.4,"err_away":7.1,"abs_total":13.5,"margin_err":-13.5,"winner_correct":true},"gp":{"err_home":-6.5,"err_away":6.5,"abs_total":13.0,"margin_err":-13.0,"winner_correct":true},"combined":{"err_home":-6.6,"err_away":6.8,"abs_total":13.4,"margin_err":-13.4,"winner_correct":true}}},{"away":"NO","home":"DET","kickoff":"2026-09-13","kickoff_ts":"2026-09-13T17:00:00+00:00","models":{"linear":{"away":20.7,"home":26.4},"poisson":{"away":20.6,"home":26.2},"gp":{"away":20.5,"home":27.1},"combined":{"away":20.6,"home":26.6}},"market":{"spread":7.0,"total":49.5,"away":21.2,"home":28.2},"backfilled":true,"provisional":false,"actual":{"away":30.0,"home":31.0},"grade":{"linear":{"err_home":-4.6,"err_away":-9.3,"abs_total":13.9,"margin_err":4.7,"winner_correct":true},"poisson":{"err_home":-4.8,"err_away":-9.4,"abs_total":14.2,"margin_err":4.6,"winner_correct":true},"gp":{"err_home":-3.9,"err_away":-9.5,"abs_total":13.4,"margin_err":5.6,"winner_correct":true},"combined":{"err_home":-4.4,"err_away":-9.4,"abs_total":13.8,"margin_err":5.0,"winner_correct":true}}},{"away":"NYJ","home":"TEN","kickoff":"2026-09-13","kickoff_ts":"2026-09-13T17:00:00+00:00","models":{"linear":{"away":21.6,"home":22.6},"poisson":{"away":21.6,"home":22.3},"gp":{"away":21.8,"home":21.9},"combined":{"away":21.7,"home":22.3}},"market":{"spread":1.5,"total":39.5,"away":19.0,"home":20.5},"backfilled":true,"provisional":false,"actual":{"away":23.0,"home":10.0},"grade":{"linear":{"err_home":12.6,"err_away":-1.4,"abs_total":14.0,"margin_err":14.0,"winner_correct":false},"poisson":{"err_home":12.3,"err_away":-1.4,"abs_total":13.7,"margin_err":13.7,"winner_correct":false},"gp":{"err_home":11.9,"err_away":-1.2,"abs_total":13.1,"margin_err":13.1,"winner_correct":false},"combined":{"err_home":12.3,"err_away":-1.3,"abs_total":13.6,"margin_err":13.6,"winner_correct":false}}},{"away":"TB","home":"CIN","kickoff":"2026-09-13","kickoff_ts":"2026-09-13T17:00:00+00:00","models":{"linear":{"away":24.1,"home":25.2},"poisson":{"away":24.1,"home":25.2},"gp":{"away":23.9,"home":25.6},"combined":{"away":24.0,"home":25.3}},"market":{"spread":3.5,"total":50.5,"away":23.5,"home":27.0},"backfilled":true,"provisional":false,"actual":{"away":27.0,"home":33.0},"grade":{"linear":{"err_home":-7.8,"err_away":-2.9,"abs_total":10.7,"margin_err":-4.9,"winner_correct":true},"poisson":{"err_home":-7.8,"err_away":-2.9,"abs_total":10.7,"margin_err":-4.9,"winner_correct":true},"gp":{"err_home":-7.4,"err_away":-3.1,"abs_total":10.5,"margin_err":-4.3,"winner_correct":true},"combined":{"err_home":-7.7,"err_away":-3.0,"abs_total":10.7,"margin_err":-4.7,"winner_correct":true}}},{"away":"ARI","home":"LAC","kickoff":"2026-09-13","kickoff_ts":"2026-09-13T20:25:00+00:00","models":{"linear":{"away":19.7,"home":25.7},"poisson":{"away":19.6,"home":25.6},"gp":{"away":19.8,"home":25.1},"combined":{"away":19.7,"home":25.5}},"market":{"spread":8.5,"total":47.5,"away":19.5,"home":28.0},"backfilled":true,"provisional":false,"actual":{"away":26.0,"home":14.0},"grade":{"linear":{"err_home":11.7,"err_away":-6.3,"abs_total":18.0,"margin_err":18.0,"winner_correct":false},"poisson":{"err_home":11.6,"err_away":-6.4,"abs_total":18.0,"margin_err":18.0,"winner_correct":false},"gp":{"err_home":11.1,"err_away":-6.2,"abs_total":17.3,"margin_err":17.3,"winner_correct":false},"combined":{"err_home":11.5,"err_away":-6.3,"abs_total":17.8,"margin_err":17.8,"winner_correct":false}}},{"away":"GB","home":"MIN","kickoff":"2026-09-13","kickoff_ts":"2026-09-13T20:25:00+00:00","models":{"linear":{"away":23.2,"home":22.7},"poisson":{"away":23.3,"home":22.9},"gp":{"away":22.8,"home":21.9},"combined":{"away":23.1,"home":22.5}},"market":{"spread":1.5,"total":46.5,"away":22.5,"home":24.0},"backfilled":true,"provisional":false,"actual":{"away":22.0,"home":39.0},"grade":{"linear":{"err_home":-16.3,"err_away":1.2,"abs_total":17.5,"margin_err":-17.5,"winner_correct":false},"poisson":{"err_home":-16.1,"err_away":1.3,"abs_total":17.4,"margin_err":-17.4,"winner_correct":false},"gp":{"err_home":-17.1,"err_away":0.8,"abs_total":17.9,"margin_err":-17.9,"winner_correct":false},"combined":{"err_home":-16.5,"err_away":1.1,"abs_total":17.6,"margin_err":-17.6,"winner_correct":false}}},{"away":"MIA","home":"LV","kickoff":"2026-09-13","kickoff_ts":"2026-09-13T20:25:00+00:00","models":{"linear":{"away":23.9,"home":19.1},"poisson":{"away":23.9,"home":19.4},"gp":{"away":23.4,"home":18.8},"combined":{"away":23.7,"home":19.1}},"market":{"spread":3.0,"total":40.5,"away":18.8,"home":21.8},"backfilled":true,"provisional":false,"actual":{"away":13.0,"home":27.0},"grade":{"linear":{"err_home":-7.9,"err_away":10.9,"abs_total":18.8,"margin_err":-18.8,"winner_correct":false},"poisson":{"err_home":-7.6,"err_away":10.9,"abs_total":18.5,"margin_err":-18.5,"winner_correct":false},"gp":{"err_home":-8.2,"err_away":10.4,"abs_total":18.6,"margin_err":-18.6,"winner_correct":false},"combined":{"err_home":-7.9,"err_away":10.7,"abs_total":18.6,"margin_err":-18.6,"winner_correct":false}}},{"away":"WAS","home":"PHI","kickoff":"2026-09-13","kickoff_ts":"2026-09-13T20:25:00+00:00","models":{"linear":{"away":21.2,"home":25.8},"poisson":{"away":21.2,"home":25.6},"gp":{"away":21.4,"home":25.1},"combined":{"away":21.3,"home":25.5}},"market":{"spread":6.0,"total":43.5,"away":18.8,"home":24.8},"backfilled":true,"provisional":false,"actual":{"away":22.0,"home":24.0},"grade":{"linear":{"err_home":1.8,"err_away":-0.8,"abs_total":2.6,"margin_err":2.6,"winner_correct":true},"poisson":{"err_home":1.6,"err_away":-0.8,"abs_total":2.4,"margin_err":2.4,"winner_correct":true},"gp":{"err_home":1.1,"err_away":-0.6,"abs_total":1.7,"margin_err":1.7,"winner_correct":true},"combined":{"err_home":1.5,"err_away":-0.7,"abs_total":2.2,"margin_err":2.2,"winner_correct":true}}},{"away":"DAL","home":"NYG","kickoff":"2026-09-13","kickoff_ts":"2026-09-14T00:20:00+00:00","models":{"linear":{"away":26.3,"home":23.2},"poisson":{"away":27.1,"home":23.0},"gp":{"away":25.3,"home":22.3},"combined":{"away":26.2,"home":22.8}},"market":{"spread":-3.0,"total":47.5,"away":25.2,"home":22.2},"backfilled":true,"provisional":false,"actual":{"away":20.0,"home":28.0},"grade":{"linear":{"err_home":-4.8,"err_away":6.3,"abs_total":11.1,"margin_err":-11.1,"winner_correct":false},"poisson":{"err_home":-5.0,"err_away":7.1,"abs_total":12.1,"margin_err":-12.1,"winner_correct":false},"gp":{"err_home":-5.7,"err_away":5.3,"abs_total":11.0,"margin_err":-11.0,"winner_correct":false},"combined":{"err_home":-5.2,"err_away":6.2,"abs_total":11.4,"margin_err":-11.4,"winner_correct":false}}},{"away":"DEN","home":"KC","kickoff":"2026-09-14","kickoff_ts":"2026-09-15T00:15:00+00:00","models":{"linear":{"away":22.8,"home":22.2},"poisson":{"away":22.7,"home":21.8},"gp":{"away":22.7,"home":22.5},"combined":{"away":22.7,"home":22.2}},"market":{"spread":2.5,"total":42.5,"away":20.0,"home":22.5},"backfilled":true,"provisional":false,"actual":{"away":10.0,"home":31.0},"grade":{"linear":{"err_home":-8.8,"err_away":12.8,"abs_total":21.6,"margin_err":-21.6,"winner_correct":false},"poisson":{"err_home":-9.2,"err_away":12.7,"abs_total":21.9,"margin_err":-21.9,"winner_correct":false},"gp":{"err_home":-8.5,"err_away":12.7,"abs_total":21.2,"margin_err":-21.2,"winner_correct":false},"combined":{"err_home":-8.8,"err_away":12.7,"abs_total":21.5,"margin_err":-21.5,"winner_correct":false}}}]},{"models":["linear","poisson","gp","combined"],"n_provisional":0,"season":2026,"week":2,"trained_through":"2026-09-14","n_training_games":1976,"generated_at":"2026-09-17T23:55:47.671950+00:00","n_backfilled":0,"n_backfilled_graded":0,"backfilled":false,"n_graded":16,"summary":{"linear":{"mae":8.85,"margin_mae":12.76,"winners":9,"n":16},"poisson":{"mae":8.79,"margin_mae":12.75,"winners":9,"n":16},"gp":{"mae":8.75,"margin_mae":12.46,"winners":9,"n":16},"combined":{"mae":8.79,"margin_mae":12.65,"winners":9,"n":16}},"games":[{"away":"DET","home":"BUF","kickoff":"2026-09-17","kickoff_ts":"2026-09-18T00:15:00+00:00","models":{"linear":{"away":25.2,"home":26.6},"poisson":{"away":25.6,"home":27.4},"gp":{"away":24.8,"home":27.0},"combined":{"away":25.2,"home":27.0}},"market":{"spread":5.5,"total":54.5,"away":24.5,"home":30.0},"backfilled":false,"provisional":false,"actual":{"away":31.0,"home":41.0},"grade":{"linear":{"err_home":-14.4,"err_away":-5.8,"abs_total":20.2,"margin_err":-8.6,"winner_correct":true},"poisson":{"err_home":-13.6,"err_away":-5.4,"abs_total":19.0,"margin_err":-8.2,"winner_correct":true},"gp":{"err_home":-14.0,"err_away":-6.2,"abs_total":20.2,"margin_err":-7.8,"winner_correct":true},"combined":{"err_home":-14.0,"err_away":-5.8,"abs_total":19.8,"margin_err":-8.2,"winner_correct":true}}},{"away":"CAR","home":"ATL","kickoff":"2026-09-20","kickoff_ts":"2026-09-20T17:00:00+00:00","models":{"linear":{"away":22.0,"home":24.7},"poisson":{"away":22.1,"home":25.0},"gp":{"away":22.0,"home":22.8},"combined":{"away":22.0,"home":24.2}},"market":{"spread":-2.5,"total":43.5,"away":23.0,"home":20.5},"backfilled":false,"provisional":false,"actual":{"away":34.0,"home":3.0},"grade":{"linear":{"err_home":21.7,"err_away":-12.0,"abs_total":33.7,"margin_err":33.7,"winner_correct":false},"poisson":{"err_home":22.0,"err_away":-11.9,"abs_total":33.9,"margin_err":33.9,"winner_correct":false},"gp":{"err_home":19.8,"err_away":-12.0,"abs_total":31.8,"margin_err":31.8,"winner_correct":false},"combined":{"err_home":21.2,"err_away":-12.0,"abs_total":33.2,"margin_err":33.2,"winner_correct":false}}},{"away":"CIN","home":"HOU","kickoff":"2026-09-20","kickoff_ts":"2026-09-20T17:00:00+00:00","models":{"linear":{"away":23.0,"home":25.0},"poisson":{"away":22.9,"home":25.0},"gp":{"away":23.1,"home":23.9},"combined":{"away":23.0,"home":24.6}},"market":{"spread":2.5,"total":46.5,"away":22.0,"home":24.5},"backfilled":false,"provisional":false,"actual":{"away":20.0,"home":6.0},"grade":{"linear":{"err_home":19.0,"err_away":3.0,"abs_total":22.0,"margin_err":16.0,"winner_correct":false},"poisson":{"err_home":19.0,"err_away":2.9,"abs_total":21.9,"margin_err":16.1,"winner_correct":false},"gp":{"err_home":17.9,"err_away":3.1,"abs_total":21.0,"margin_err":14.8,"winner_correct":false},"combined":{"err_home":18.6,"err_away":3.0,"abs_total":21.6,"margin_err":15.6,"winner_correct":false}}},{"away":"CLE","home":"TB","kickoff":"2026-09-20","kickoff_ts":"2026-09-20T17:00:00+00:00","models":{"linear":{"away":19.4,"home":26.2},"poisson":{"away":19.7,"home":26.8},"gp":{"away":19.3,"home":26.7},"combined":{"away":19.5,"home":26.6}},"market":{"spread":8.5,"total":41.5,"away":16.5,"home":25.0},"backfilled":false,"provisional":false,"actual":{"away":23.0,"home":19.0},"grade":{"linear":{"err_home":7.2,"err_away":-3.6,"abs_total":10.8,"margin_err":10.8,"winner_correct":false},"poisson":{"err_home":7.8,"err_away":-3.3,"abs_total":11.1,"margin_err":11.1,"winner_correct":false},"gp":{"err_home":7.7,"err_away":-3.7,"abs_total":11.4,"margin_err":11.4,"winner_correct":false},"combined":{"err_home":7.6,"err_away":-3.5,"abs_total":11.1,"margin_err":11.1,"winner_correct":false}}},{"away":"GB","home":"NYJ","kickoff":"2026-09-20","kickoff_ts":"2026-09-20T17:00:00+00:00","models":{"linear":{"away":24.4,"home":22.2},"poisson":{"away":24.8,"home":21.9},"gp":{"away":24.3,"home":21.5},"combined":{"away":24.5,"home":21.9}},"market":{"spread":-3.5,"total":44.5,"away":24.0,"home":20.5},"backfilled":false,"provisional":false,"actual":{"away":20.0,"home":17.0},"grade":{"linear":{"err_home":5.2,"err_away":4.4,"abs_total":9.6,"margin_err":0.8,"winner_correct":true},"poisson":{"err_home":4.9,"err_away":4.8,"abs_total":9.7,"margin_err":0.1,"winner_correct":true},"gp":{"err_home":4.5,"err_away":4.3,"abs_total":8.8,"margin_err":0.2,"winner_correct":true},"combined":{"err_home":4.9,"err_away":4.5,"abs_total":9.4,"margin_err":0.4,"winner_correct":true}}},{"away":"MIN","home":"CHI","kickoff":"2026-09-20","kickoff_ts":"2026-09-20T17:00:00+00:00","models":{"linear":{"away":23.1,"home":26.5},"poisson":{"away":23.0,"home":27.0},"gp":{"away":23.0,"home":27.2},"combined":{"away":23.0,"home":26.9}},"market":{"spread":4.5,"total":48.5,"away":22.0,"home":26.5},"backfilled":false,"provisional":false,"actual":{"away":9.0,"home":3.0},"grade":{"linear":{"err_home":23.5,"err_away":14.1,"abs_total":37.6,"margin_err":9.4,"winner_correct":false},"poisson":{"err_home":24.0,"err_away":14.0,"abs_total":38.0,"margin_err":10.0,"winner_correct":false},"gp":{"err_home":24.2,"err_away":14.0,"abs_total":38.2,"margin_err":10.2,"winner_correct":false},"combined":{"err_home":23.9,"err_away":14.0,"abs_total":37.9,"margin_err":9.9,"winner_correct":false}}},{"away":"NO","home":"BAL","kickoff":"2026-09-20","kickoff_ts":"2026-09-20T17:00:00+00:00","models":{"linear":{"away":20.4,"home":27.4},"poisson":{"away":20.5,"home":28.2},"gp":{"away":20.4,"home":28.5},"combined":{"away":20.4,"home":28.0}},"market":{"spread":7.5,"total":46.5,"away":19.5,"home":27.0},"backfilled":false,"provisional":false,"actual":{"away":24.0,"home":17.0},"grade":{"linear":{"err_home":10.4,"err_away":-3.6,"abs_total":14.0,"margin_err":14.0,"winner_correct":false},"poisson":{"err_home":11.2,"err_away":-3.5,"abs_total":14.7,"margin_err":14.7,"winner_correct":false},"gp":{"err_home":11.5,"err_away":-3.6,"abs_total":15.1,"margin_err":15.1,"winner_correct":false},"combined":{"err_home":11.0,"err_away":-3.6,"abs_total":14.6,"margin_err":14.6,"winner_correct":false}}},{"away":"PHI","home":"TEN","kickoff":"2026-09-20","kickoff_ts":"2026-09-20T17:00:00+00:00","models":{"linear":{"away":24.0,"home":19.4},"poisson":{"away":23.9,"home":19.4},"gp":{"away":23.7,"home":18.8},"combined":{"away":23.9,"home":19.2}},"market":{"spread":-7.0,"total":39.5,"away":23.2,"home":16.2},"backfilled":false,"provisional":false,"actual":{"away":24.0,"home":20.0},"grade":{"linear":{"err_home":-0.6,"err_away":0.0,"abs_total":0.6,"margin_err":-0.6,"winner_correct":true},"poisson":{"err_home":-0.6,"err_away":-0.1,"abs_total":0.7,"margin_err":-0.5,"winner_correct":true},"gp":{"err_home":-1.2,"err_away":-0.3,"abs_total":1.5,"margin_err":-0.9,"winner_correct":true},"combined":{"err_home":-0.8,"err_away":-0.1,"abs_total":0.9,"margin_err":-0.7,"winner_correct":true}}},{"away":"PIT","home":"NE","kickoff":"2026-09-20","kickoff_ts":"2026-09-20T17:00:00+00:00","models":{"linear":{"away":19.1,"home":24.5},"poisson":{"away":18.8,"home":24.3},"gp":{"away":18.9,"home":24.2},"combined":{"away":18.9,"home":24.3}},"market":{"spread":5.5,"total":41.5,"away":18.0,"home":23.5},"backfilled":false,"provisional":false,"actual":{"away":3.0,"home":20.0},"grade":{"linear":{"err_home":4.5,"err_away":16.1,"abs_total":20.6,"margin_err":-11.6,"winner_correct":true},"poisson":{"err_home":4.3,"err_away":15.8,"abs_total":20.1,"margin_err":-11.5,"winner_correct":true},"gp":{"err_home":4.2,"err_away":15.9,"abs_total":20.1,"margin_err":-11.7,"winner_correct":true},"combined":{"err_home":4.3,"err_away":15.9,"abs_total":20.2,"margin_err":-11.6,"winner_correct":true}}},{"away":"JAX","home":"DEN","kickoff":"2026-09-20","kickoff_ts":"2026-09-20T20:05:00+00:00","models":{"linear":{"away":24.6,"home":20.7},"poisson":{"away":24.3,"home":20.2},"gp":{"away":24.3,"home":20.3},"combined":{"away":24.4,"home":20.4}},"market":{"spread":2.5,"total":45.5,"away":21.5,"home":24.0},"backfilled":false,"provisional":false,"actual":{"away":13.0,"home":20.0},"grade":{"linear":{"err_home":0.7,"err_away":11.6,"abs_total":12.3,"margin_err":-10.9,"winner_correct":false},"poisson":{"err_home":0.2,"err_away":11.3,"abs_total":11.5,"margin_err":-11.1,"winner_correct":false},"gp":{"err_home":0.3,"err_away":11.3,"abs_total":11.6,"margin_err":-11.0,"winner_correct":false},"combined":{"err_home":0.4,"err_away":11.4,"abs_total":11.8,"margin_err":-11.0,"winner_correct":false}}},{"away":"LV","home":"LAC","kickoff":"2026-09-20","kickoff_ts":"2026-09-20T20:05:00+00:00","models":{"linear":{"away":19.9,"home":23.3},"poisson":{"away":19.8,"home":23.0},"gp":{"away":19.6,"home":22.4},"combined":{"away":19.8,"home":22.9}},"market":{"spread":6.5,"total":43.5,"away":18.5,"home":25.0},"backfilled":false,"provisional":false,"actual":{"away":26.0,"home":14.0},"grade":{"linear":{"err_home":9.3,"err_away":-6.1,"abs_total":15.4,"margin_err":15.4,"winner_correct":false},"poisson":{"err_home":9.0,"err_away":-6.2,"abs_total":15.2,"margin_err":15.2,"winner_correct":false},"gp":{"err_home":8.4,"err_away":-6.4,"abs_total":14.8,"margin_err":14.8,"winner_correct":false},"combined":{"err_home":8.9,"err_away":-6.2,"abs_total":15.1,"margin_err":15.1,"winner_correct":false}}},{"away":"MIA","home":"SF","kickoff":"2026-09-20","kickoff_ts":"2026-09-20T20:25:00+00:00","models":{"linear":{"away":19.8,"home":27.8},"poisson":{"away":19.8,"home":28.5},"gp":{"away":19.7,"home":28.5},"combined":{"away":19.8,"home":28.3}},"market":{"spread":13.5,"total":44.5,"away":15.5,"home":29.0},"backfilled":false,"provisional":false,"actual":{"away":13.0,"home":35.0},"grade":{"linear":{"err_home":-7.2,"err_away":6.8,"abs_total":14.0,"margin_err":-14.0,"winner_correct":true},"poisson":{"err_home":-6.5,"err_away":6.8,"abs_total":13.3,"margin_err":-13.3,"winner_correct":true},"gp":{"err_home":-6.5,"err_away":6.7,"abs_total":13.2,"margin_err":-13.2,"winner_correct":true},"combined":{"err_home":-6.7,"err_away":6.8,"abs_total":13.5,"margin_err":-13.5,"winner_correct":true}}},{"away":"SEA","home":"ARI","kickoff":"2026-09-20","kickoff_ts":"2026-09-20T20:25:00+00:00","models":{"linear":{"away":24.7,"home":20.9},"poisson":{"away":24.4,"home":20.6},"gp":{"away":24.6,"home":20.4},"combined":{"away":24.6,"home":20.6}},"market":{"spread":-3.5,"total":41.5,"away":22.5,"home":19.0},"backfilled":false,"provisional":false,"actual":{"away":31.0,"home":7.0},"grade":{"linear":{"err_home":13.9,"err_away":-6.3,"abs_total":20.2,"margin_err":20.2,"winner_correct":true},"poisson":{"err_home":13.6,"err_away":-6.6,"abs_total":20.2,"margin_err":20.2,"winner_correct":true},"gp":{"err_home":13.4,"err_away":-6.4,"abs_total":19.8,"margin_err":19.8,"winner_correct":true},"combined":{"err_home":13.6,"err_away":-6.4,"abs_total":20.0,"margin_err":20.0,"winner_correct":true}}},{"away":"WAS","home":"DAL","kickoff":"2026-09-20","kickoff_ts":"2026-09-20T20:25:00+00:00","models":{"linear":{"away":24.9,"home":25.3},"poisson":{"away":25.5,"home":25.7},"gp":{"away":24.7,"home":25.2},"combined":{"away":25.0,"home":25.4}},"market":{"spread":3.5,"total":50.5,"away":23.5,"home":27.0},"backfilled":false,"provisional":false,"actual":{"away":20.0,"home":37.0},"grade":{"linear":{"err_home":-11.7,"err_away":4.9,"abs_total":16.6,"margin_err":-16.6,"winner_correct":true},"poisson":{"err_home":-11.3,"err_away":5.5,"abs_total":16.8,"margin_err":-16.8,"winner_correct":true},"gp":{"err_home":-11.8,"err_away":4.7,"abs_total":16.5,"margin_err":-16.5,"winner_correct":true},"combined":{"err_home":-11.6,"err_away":5.0,"abs_total":16.6,"margin_err":-16.6,"winner_correct":true}}},{"away":"IND","home":"KC","kickoff":"2026-09-20","kickoff_ts":"2026-09-21T00:20:00+00:00","models":{"linear":{"away":20.6,"home":26.0},"poisson":{"away":20.5,"home":26.1},"gp":{"away":20.9,"home":25.1},"combined":{"away":20.7,"home":25.7}},"market":{"spread":6.5,"total":46.5,"away":20.0,"home":26.5},"backfilled":false,"provisional":false,"actual":{"away":30.0,"home":33.0},"grade":{"linear":{"err_home":-7.0,"err_away":-9.4,"abs_total":16.4,"margin_err":2.4,"winner_correct":true},"poisson":{"err_home":-6.9,"err_away":-9.5,"abs_total":16.4,"margin_err":2.6,"winner_correct":true},"gp":{"err_home":-7.9,"err_away":-9.1,"abs_total":17.0,"margin_err":1.2,"winner_correct":true},"combined":{"err_home":-7.3,"err_away":-9.3,"abs_total":16.6,"margin_err":2.0,"winner_correct":true}}},{"away":"NYG","home":"LA","kickoff":"2026-09-21","kickoff_ts":"2026-09-22T00:15:00+00:00","models":{"linear":{"away":22.8,"home":25.7},"poisson":{"away":22.9,"home":26.2},"gp":{"away":23.0,"home":26.0},"combined":{"away":22.9,"home":26.0}},"market":{"spread":7.0,"total":48.5,"away":20.8,"home":27.8},"backfilled":false,"provisional":false,"actual":{"away":6.0,"home":28.0},"grade":{"linear":{"err_home":-2.3,"err_away":16.8,"abs_total":19.1,"margin_err":-19.1,"winner_correct":true},"poisson":{"err_home":-1.8,"err_away":16.9,"abs_total":18.7,"margin_err":-18.7,"winner_correct":true},"gp":{"err_home":-2.0,"err_away":17.0,"abs_total":19.0,"margin_err":-19.0,"winner_correct":true},"combined":{"err_home":-2.0,"err_away":16.9,"abs_total":18.9,"margin_err":-18.9,"winner_correct":true}}}]},{"models":["poisson","gp","linear","combined"],"n_provisional":1,"season":2026,"week":3,"trained_through":"2026-09-24","n_training_games":1993,"generated_at":"2026-09-26T17:23:47.865979+00:00","n_backfilled":0,"n_backfilled_graded":0,"backfilled":false,"n_graded":1,"summary":{"poisson":{"mae":12.1,"margin_mae":24.2,"winners":0,"n":1},"gp":{"mae":12.6,"margin_mae":25.2,"winners":0,"n":1},"linear":{"mae":12.2,"margin_mae":24.4,"winners":0,"n":1},"combined":{"mae":12.3,"margin_mae":24.6,"winners":0,"n":1}},"games":[{"away":"ATL","home":"GB","kickoff":"2026-09-24","kickoff_ts":"2026-09-25T00:15:00+00:00","models":{"poisson":{"away":21.2,"home":24.4},"gp":{"away":20.7,"home":24.9},"linear":{"away":21.2,"home":24.6},"combined":{"away":21.0,"home":24.6}},"market":{"spread":5.5,"total":43.5,"away":19.0,"home":24.5},"backfilled":false,"provisional":false,"actual":{"away":35.0,"home":14.0},"grade":{"poisson":{"err_home":10.4,"err_away":-13.8,"abs_total":24.2,"margin_err":24.2,"winner_correct":false},"gp":{"err_home":10.9,"err_away":-14.3,"abs_total":25.2,"margin_err":25.2,"winner_correct":false},"linear":{"err_home":10.6,"err_away":-13.8,"abs_total":24.4,"margin_err":24.4,"winner_correct":false},"combined":{"err_home":10.6,"err_away":-14.0,"abs_total":24.6,"margin_err":24.6,"winner_correct":false}}},{"away":"CAR","home":"CLE","kickoff":"2026-09-27","kickoff_ts":"2026-09-27T17:00:00+00:00","models":{"poisson":{"away":23.7,"home":21.1},"gp":{"away":23.5,"home":19.8},"linear":{"away":23.7,"home":21.1},"combined":{"away":23.6,"home":20.7}},"market":{"spread":-2.5,"total":42.5,"away":22.5,"home":20.0},"backfilled":false,"provisional":false},{"away":"CIN","home":"PIT","kickoff":"2026-09-27","kickoff_ts":"2026-09-27T17:00:00+00:00","models":{"poisson":{"away":21.9,"home":20.4},"gp":{"away":21.9,"home":19.5},"linear":{"away":22.2,"home":20.4},"combined":{"away":22.0,"home":20.1}},"market":{"spread":-3.5,"total":42.5,"away":23.0,"home":19.5},"backfilled":false,"provisional":false},{"away":"HOU","home":"IND","kickoff":"2026-09-27","kickoff_ts":"2026-09-27T17:00:00+00:00","models":{"poisson":{"away":23.1,"home":23.0},"gp":{"away":22.9,"home":24.1},"linear":{"away":23.2,"home":23.3},"combined":{"away":23.1,"home":23.4}},"market":{"spread":-1.5,"total":42.5,"away":22.0,"home":20.5},"backfilled":false,"provisional":false},{"away":"KC","home":"MIA","kickoff":"2026-09-27","kickoff_ts":"2026-09-27T17:00:00+00:00","models":{"poisson":{"away":26.5,"home":19.8},"gp":{"away":26.3,"home":20.2},"linear":{"away":26.3,"home":19.8},"combined":{"away":26.4,"home":19.9}},"market":{"spread":-10.0,"total":45.5,"away":27.8,"home":17.8},"backfilled":false,"provisional":false},{"away":"LAC","home":"BUF","kickoff":"2026-09-27","kickoff_ts":"2026-09-27T17:00:00+00:00","models":{"poisson":{"away":20.3,"home":29.2},"gp":{"away":19.2,"home":29.6},"linear":{"away":20.4,"home":28.9},"combined":{"away":20.0,"home":29.2}},"market":{"spread":7.0,"total":50.5,"away":21.8,"home":28.8},"backfilled":false,"provisional":false},{"away":"NE","home":"JAX","kickoff":"2026-09-27","kickoff_ts":"2026-09-27T17:00:00+00:00","models":{"poisson":{"away":20.0,"home":24.3},"gp":{"away":20.0,"home":24.8},"linear":{"away":20.3,"home":24.4},"combined":{"away":20.1,"home":24.5}},"market":{"spread":3.0,"total":46.5,"away":21.8,"home":24.8},"backfilled":false,"provisional":false},{"away":"NYJ","home":"DET","kickoff":"2026-09-27","kickoff_ts":"2026-09-27T17:00:00+00:00","models":{"poisson":{"away":22.3,"home":27.5},"gp":{"away":21.6,"home":28.4},"linear":{"away":22.3,"home":27.4},"combined":{"away":22.1,"home":27.8}},"market":{"spread":6.5,"total":48.5,"away":21.0,"home":27.5},"backfilled":false,"provisional":false},{"away":"SEA","home":"WAS","kickoff":"2026-09-27","kickoff_ts":"2026-09-27T17:00:00+00:00","models":{"poisson":{"away":28.9,"home":17.6},"gp":{"away":28.7,"home":19.2},"linear":{"away":28.3,"home":17.1},"combined":{"away":28.6,"home":18.0}},"market":{"spread":-7.5,"total":40.5,"away":24.0,"home":16.5},"backfilled":false,"provisional":false},{"away":"TEN","home":"NYG","kickoff":"2026-09-27","kickoff_ts":"2026-09-27T17:00:00+00:00","models":{"poisson":{"away":21.7,"home":22.1},"gp":{"away":21.6,"home":22.3},"linear":{"away":21.8,"home":22.3},"combined":{"away":21.7,"home":22.2}},"market":{"spread":2.5,"total":37.5,"away":17.5,"home":20.0},"backfilled":false,"provisional":false},{"away":"ARI","home":"SF","kickoff":"2026-09-27","kickoff_ts":"2026-09-27T20:05:00+00:00","models":{"poisson":{"away":20.6,"home":28.1},"gp":{"away":20.1,"home":28.4},"linear":{"away":20.6,"home":27.9},"combined":{"away":20.4,"home":28.1}},"market":{"spread":8.5,"total":47.5,"away":19.5,"home":28.0},"backfilled":false,"provisional":false},{"away":"MIN","home":"TB","kickoff":"2026-09-27","kickoff_ts":"2026-09-27T20:05:00+00:00","models":{"poisson":{"away":22.6,"home":21.4},"gp":{"away":22.8,"home":21.9},"linear":{"away":22.9,"home":21.6},"combined":{"away":22.8,"home":21.7}},"market":{"spread":-1.5,"total":42.5,"away":22.0,"home":20.5},"backfilled":false,"provisional":false},{"away":"BAL","home":"DAL","kickoff":"2026-09-27","kickoff_ts":"2026-09-27T20:25:00+00:00","models":{"poisson":{"away":28.3,"home":21.8},"gp":{"away":25.2,"home":22.0},"linear":{"away":27.4,"home":21.9},"combined":{"away":27.0,"home":21.9}},"market":{"spread":-3.5,"total":53.5,"away":28.5,"home":25.0},"backfilled":false,"provisional":false},{"away":"LV","home":"NO","kickoff":"2026-09-27","kickoff_ts":"2026-09-27T20:25:00+00:00","models":{"poisson":{"away":20.3,"home":23.6},"gp":{"away":20.2,"home":23.9},"linear":{"away":20.5,"home":23.9},"combined":{"away":20.3,"home":23.8}},"market":{"spread":3.0,"total":43.5,"away":20.2,"home":23.2},"backfilled":false,"provisional":false},{"away":"LA","home":"DEN","kickoff":"2026-09-27","kickoff_ts":"2026-09-28T00:20:00+00:00","models":{"poisson":{"away":23.9,"home":21.2},"gp":{"away":23.6,"home":21.5},"linear":{"away":23.8,"home":21.3},"combined":{"away":23.8,"home":21.4}},"market":{"spread":-2.5,"total":44.5,"away":23.5,"home":21.0},"backfilled":false,"provisional":false},{"away":"PHI","home":"CHI","kickoff":"2026-09-28","kickoff_ts":"2026-09-29T00:15:00+00:00","models":{"poisson":{"away":22.7,"home":24.8},"gp":{"away":22.9,"home":24.9},"linear":{"away":22.8,"home":24.9},"combined":{"away":22.8,"home":24.9}},"market":{"spread":-4.5,"total":41.5,"away":23.0,"home":18.5},"backfilled":false,"provisional":true}]}]};
+// Which models to show comes from the records (build_report.py), so changing
+// the live models in config.yaml changes the page without touching this file.
+const MODELS = DATA.models;
+const COMP = DATA.composite;
+const fmt = n => n.toFixed(1);
+const signed = n => (n > 0 ? "+" : n < 0 ? "−" : "±") + Math.abs(n).toFixed(1);
+const slug = w => `${w.season}-w${String(w.week).padStart(2,"0")}`;
+
+// Games are already ordered by kickoff server-side. Render the time in the
+// READER's timezone rather than baking one in -- the page is a single file that
+// gets emailed and opened on phones in other zones. Falls back to the bare date
+// for weeks predicted before kickoff times were recorded.
+const kickLabel = g => {
+  if (!g.kickoff_ts) return g.kickoff;
+  const d = new Date(g.kickoff_ts);
+  if (isNaN(d)) return g.kickoff;
+  return d.toLocaleString(undefined, {
+    weekday: "short", month: "short", day: "numeric",
+    hour: "numeric", minute: "2-digit",
+  });
+};
+
+let idx = DATA.weeks.length - 1;
+
+function fromHash(){
+  const h = location.hash.replace(/^#/,"");
+  const i = DATA.weeks.findIndex(w => slug(w) === h);
+  if (i >= 0) idx = i;
+}
+
+function drawRail(){
+  const rail = document.getElementById("rail");
+  rail.replaceChildren(...DATA.weeks.map((w,i) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.setAttribute("aria-current", i === idx ? "true" : "false");
+    // The season is only worth printing where it changes -- two dozen tabs
+    // each repeating "2025" is noise, and the break does the same work.
+    const newSeason = i === 0 || DATA.weeks[i - 1].season !== w.season;
+    if (newSeason && i > 0) b.classList.add("season-break");
+    const label = document.createElement("span");
+    label.textContent = newSeason ? `${w.season} · Wk ${w.week}` : `Wk ${w.week}`;
+    b.title = `${w.season} Week ${w.week}`;
+    const rec = document.createElement("span");
+    rec.className = "rec";
+    if (w.n_graded === 0){
+      rec.classList.add("pend");
+      rec.textContent = `${w.games.length} upcoming`;
+    } else {
+      const s = w.summary[COMP];
+      rec.textContent = s ? `${s.winners}–${s.n - s.winners} · ${s.mae.toFixed(2)} MAE` : `${w.n_graded} final`;
+    }
+    b.append(label, rec);
+    b.onclick = () => { idx = i; location.hash = slug(w); render(); };
+    return b;
+  }));
+  const cur = rail.querySelector('[aria-current="true"]');
+  if (cur) cur.scrollIntoView({block:"nearest", inline:"center"});
+}
+
+function drawProv(w){
+  const graded = w.n_graded === w.games.length && w.n_graded > 0;
+  const rows = [
+    ["Week", `${w.season} · Week ${w.week}`],
+    ["Games", `${w.games.length}${graded ? " (all final)" : w.n_graded ? ` (${w.n_graded} final)` : ""}`],
+    ["Trained through", w.trained_through],
+    ["Training games", w.n_training_games.toLocaleString()],
+    ["Predicted", w.generated_at.slice(0,10)],
+  ];
+  const dl = document.getElementById("prov");
+  dl.replaceChildren(...rows.map(([k,v]) => {
+    const d = document.createElement("div");
+    const dt = document.createElement("dt"); dt.textContent = k;
+    const dd = document.createElement("dd"); dd.textContent = v;
+    d.append(dt, dd); return d;
+  }));
+}
+
+function drawLede(w){
+  const el = document.getElementById("lede");
+  el.replaceChildren();
+  const b = document.createElement("strong");
+  if (w.n_graded === 0){
+    b.textContent = `${w.games.length} games not yet played.`;
+    el.append(b, document.createTextNode(
+      ` Every model below was fit on all ${w.n_training_games.toLocaleString()} games completed ` +
+      `through ${w.trained_through} — nothing from this week or later. Once the scores are in, ` +
+      `re-run the report and this page grades itself.`));
+  } else {
+    const s = w.summary[COMP];
+    b.textContent = `${w.n_graded} of ${w.games.length} games are final.`;
+    el.append(b, document.createTextNode(
+      s ? ` The combined model called ${s.winners} of ${s.n} winners and missed each score by ` +
+          `${s.mae.toFixed(2)} points on average (${s.margin_mae.toFixed(2)} on the margin). ` +
+          `A tick marks a correct winner; the number beside it is the margin error, ` +
+          `signed so that +7.0 means the model had the home team seven points better ` +
+          `than they turned out to be.`
+        : " Grades are shown per game below."));
+  }
+}
+
+function drawFlag(w){
+  const el = document.getElementById("flag");
+  el.replaceChildren();
+  const n = w.n_backfilled || 0;
+  if (!n) return;
+  const total = w.games.length;
+  const all = n === total;
+  const d = document.createElement("div");
+  d.className = "flag";
+  const b = document.createElement("b");
+  // A week is written once per slate -- Thursday, Sunday, Monday -- so it is
+  // normal for part of a week to be pre-registered and part not. Saying which
+  // games beats condemning the whole slate.
+  b.textContent = all ? "Backfilled week. " : `${n} of ${total} games backfilled. `;
+  d.append(b, document.createTextNode(
+    (all
+      ? `These predictions were written after the games were played. `
+      : `Those ${n} were written after kickoff; the other ${total - n} were pre-registered ` +
+        `and are marked below. `) +
+    `The fit still only ever saw games that had already finished, so no result from a game ` +
+    `reached its own forecast — but two softer advantages remain that a prediction made ahead ` +
+    `of kickoff does not have. Nothing stopped a late one from being regenerated until it ` +
+    `looked good, and the model's settings (how fast old games decay, how hard the fit is ` +
+    `regularised) were chosen on a dataset that already contained these games. ` +
+    `Weigh them accordingly.`));
+  el.append(d);
+}
+
+function drawCard(w){
+  const card = document.getElementById("card");
+  card.replaceChildren();
+  if (!w.n_graded){ card.style.display = "none"; return; }
+  card.style.display = "";
+  const scored = MODELS.filter(([k]) => w.summary[k]);
+  if (!scored.length){ card.style.display = "none"; return; }
+  const best = Math.min(...scored.map(([k]) => w.summary[k].mae));
+  card.replaceChildren(...scored.map(([k,label]) => {
+    const s = w.summary[k];
+    const sec = document.createElement("section");
+    if (s.mae === best) sec.className = "best";
+    const h = document.createElement("h3"); h.textContent = label;
+    const big = document.createElement("div"); big.className = "big";
+    big.textContent = `${s.winners}–${s.n - s.winners}`;
+    const note = document.createElement("div"); note.className = "note";
+    note.textContent = `${s.mae.toFixed(2)} pts avg error per score · ${s.margin_mae.toFixed(2)} on margin`;
+    sec.append(h, big, note); return sec;
+  }));
+}
+
+function drawHead(w){
+  const cells = [["matchup","Matchup"]];
+  if (w.n_graded) cells.push(["final","Final"]);
+  MODELS.forEach(([,label]) => cells.push(["", label]));
+  cells.push(["mkt","Market"]);
+  document.getElementById("head").replaceChildren(...cells.map(([cls,label]) => {
+    const th = document.createElement("th");
+    if (cls) th.className = cls;
+    th.textContent = label;
+    return th;
+  }));
+}
+
+function modelCell(g, key){
+  const td = document.createElement("td");
+  const p = g.models[key];
+  if (!p){ td.className = "dash"; td.textContent = "—"; return td; }
+  td.append(document.createTextNode(`${fmt(p.away)}–${fmt(p.home)}`));
+  const gr = g.grade && g.grade[key];
+  if (gr){
+    const s = document.createElement("span");
+    s.className = "err " + (gr.winner_correct ? "hit" : "miss");
+    s.textContent = `${gr.winner_correct ? "✓" : "✗"} ${signed(gr.margin_err)} margin`;
+    s.title = `away ${signed(gr.err_away)}, ` +
+              `home ${signed(gr.err_home)} · ${gr.abs_total} total points off`;
+    td.append(s);
+  }
+  return td;
+}
+
+function drawBody(w){
+  document.getElementById("body").replaceChildren(...w.games.map(g => {
+    const tr = document.createElement("tr");
+    const m = document.createElement("td");
+    m.className = "matchup";
+    m.append(document.createTextNode(`${g.away} @ ${g.home}`));
+    const dt = document.createElement("span");
+    dt.className = "dt"; dt.textContent = kickLabel(g);
+    if (g.backfilled) dt.append(lateTag());
+    if (g.provisional) dt.append(provisionalTag());
+    m.append(dt);
+    tr.append(m);
+
+    if (w.n_graded){
+      const f = document.createElement("td");
+      f.className = "final";
+      if (g.actual) f.textContent = `${g.actual.away}–${g.actual.home}`;
+      else { f.classList.add("dash"); f.textContent = "—"; }
+      tr.append(f);
+    }
+    MODELS.forEach(([k]) => tr.append(modelCell(g, k)));
+
+    const mk = document.createElement("td");
+    mk.className = "mkt";
+    if (g.market) mk.textContent = `${fmt(g.market.away)}–${fmt(g.market.home)}`;
+    else { mk.classList.add("dash"); mk.textContent = "no line"; }
+    tr.append(mk);
+    return tr;
+  }));
+}
+
+function careerLines(){
+  // Running record across every graded week. Weighted by games, not by week,
+  // so a 16-game week counts more than a 2-game playoff round -- and counted
+  // from the stored grades, never recomputed from a model.
+  let n = 0, won = 0, pts = 0, back = 0;
+  DATA.weeks.forEach(w => {
+    const s = w.summary[COMP];
+    if (!s) return;
+    n += s.n; won += s.winners; pts += s.mae * s.n * 2;
+    // Count backfilled GAMES, not whole weeks. A week with one late Thursday
+    // forecast used to discount all sixteen of its results.
+    back += (w.n_backfilled_graded || 0);
+  });
+  const lines = [
+    `${DATA.weeks.length} week${DATA.weeks.length > 1 ? "s" : ""} on file · ` +
+    `forecasts as of ${DATA.forecasts_as_of.slice(0,10)}` +
+    (DATA.results_through ? ` · results through ${DATA.results_through}` : ""),
+  ];
+  if (n){
+    lines.push(`Combined model, all graded games: ${won}–${n - won} ` +
+               `· ${(pts / (2 * n)).toFixed(2)} MAE`);
+    if (back) lines.push(back === n
+      ? `All ${n} were backfilled after the fact`
+      : `${back} of those ${n} were backfilled after the fact`);
+  }
+  return lines.map(text => {
+    const d = document.createElement("div");
+    d.textContent = text;
+    return d;
+  });
+}
+
+// Marks a single game whose forecast was written after its own kickoff. Only
+// meaningful now that a week is predicted in three passes and can be part
+// pre-registered, part not.
+function lateTag(){
+  const t = document.createElement("span");
+  t.className = "late";
+  t.textContent = "predicted late";
+  t.title = "This forecast was written after this game had already kicked off";
+  return t;
+}
+
+// A forecast written before the game's FINAL injury report was in the data --
+// injury_impact, the model's one leading indicator, was mostly missing.
+function provisionalTag(){
+  const t = document.createElement("span");
+  t.className = "late";
+  t.textContent = "pre-injury-report";
+  t.title = "Forecast before this game's final injury report was published; " +
+            "injured players were not yet accounted for";
+  return t;
+}
+
+function gradeSpan(gr){
+  const s = document.createElement("span");
+  s.className = "err " + (gr.winner_correct ? "hit" : "miss");
+  s.textContent = `${gr.winner_correct ? "✓" : "✗"} ${signed(gr.margin_err)}`;
+  return s;
+}
+
+function drawCards(w){
+  document.getElementById("cards").replaceChildren(...w.games.map(g => {
+    const c = document.createElement("div");
+    c.className = "gcard";
+    const h = document.createElement("h3");
+    h.textContent = `${g.away} @ ${g.home}`;
+    const when = document.createElement("div");
+    when.className = "when"; when.textContent = kickLabel(g);
+    if (g.backfilled) when.append(lateTag());
+    if (g.provisional) when.append(provisionalTag());
+    c.append(h, when);
+
+    if (g.actual){
+      const f = document.createElement("div");
+      f.className = "fin";
+      const tag = document.createElement("span"); tag.textContent = "Final";
+      f.append(tag, document.createTextNode(`${g.actual.away}–${g.actual.home}`));
+      c.append(f);
+    }
+
+    MODELS.forEach(([k,label]) => {
+      const p = g.models[k];
+      if (!p) return;
+      const row = document.createElement("div");
+      row.className = "grow";
+      const kk = document.createElement("span"); kk.className = "k"; kk.textContent = label;
+      const vv = document.createElement("span"); vv.className = "v";
+      vv.append(document.createTextNode(`${fmt(p.away)}–${fmt(p.home)}`));
+      const gr = g.grade && g.grade[k];
+      if (gr) vv.append(gradeSpan(gr));
+      row.append(kk, vv);
+      c.append(row);
+    });
+
+    const row = document.createElement("div");
+    row.className = "grow mk";
+    const kk = document.createElement("span"); kk.className = "k"; kk.textContent = "Market";
+    const vv = document.createElement("span"); vv.className = "v";
+    vv.textContent = g.market ? `${fmt(g.market.away)}–${fmt(g.market.home)}` : "no line";
+    row.append(kk, vv);
+    c.append(row);
+    return c;
+  }));
+}
+
+function render(){
+  const w = DATA.weeks[idx];
+  document.getElementById("sub").replaceChildren(...careerLines());
+  document.title = `NFL Score Ledger — ${w.season} Week ${w.week}`;
+  drawRail(); drawProv(w); drawLede(w); drawFlag(w); drawCard(w);
+  drawHead(w); drawBody(w); drawCards(w);
+}
+
+window.addEventListener("hashchange", () => { fromHash(); render(); });
+document.addEventListener("keydown", e => {
+  if (e.target.tagName === "INPUT" || e.metaKey || e.ctrlKey) return;
+  if (e.key === "ArrowLeft" && idx > 0){ idx--; location.hash = slug(DATA.weeks[idx]); }
+  if (e.key === "ArrowRight" && idx < DATA.weeks.length - 1){ idx++; location.hash = slug(DATA.weeks[idx]); }
+});
+
+fromHash();
+render();
+</script>
+
+</body>
+</html>

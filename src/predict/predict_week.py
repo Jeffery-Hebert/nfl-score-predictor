@@ -366,7 +366,8 @@ def main(argv=None):
     ap.add_argument(
         "--html",
         action="store_true",
-        help="also rebuild data/predictions/index.html (every week, graded)",
+        help="no longer needed: the ledger page is rebuilt whenever a record "
+        "is written (kept so older commands still run)",
     )
     ap.add_argument(
         "--skip",
@@ -555,28 +556,30 @@ def main(argv=None):
             if pd.notna(r.get("market_home"))
             else f"{'no line':>12}"
         )
-        final = r.get("injury_report_final")
-        flag = "  *provisional" if pd.notna(final) and not bool(final) else ""
+        provisional = injury_readiness.is_provisional(r.get("injury_report_final"))
+        flag = "  *provisional" if provisional else ""
         print(
             f"{when:<19}{r['away_team'] + ' @ ' + r['home_team']:<13}{cells}{mk}{flag}"
         )
 
     print("\nScores shown as away-home. Market column is the CLOSING line's implied")
     print("score and is reference only -- it is never a model input.")
-    if (~out["injury_report_final"].fillna(True).astype(bool)).any():
+    if out["injury_report_final"].map(injury_readiness.is_provisional).any():
         print(
             "*provisional: forecast before the game's final injury report was in the data."
         )
     print(f"Record: {path}")
 
-    if args.html:
-        # Deliberately NOT a page for this week alone. The report is rebuilt
-        # from every saved prediction, so the new week joins the ledger next to
-        # the ones already graded rather than replacing them.
-        from src.predict import build_report
+    # Always, not only with --html: a record the page does not show is how the
+    # ledger came to say "pre-injury-report" about forecasts that were final
+    # (2026-09-27). Rebuilt from EVERY saved week, so the new one joins the
+    # ledger next to those already graded; render() verifies it before writing.
+    from src.predict import build_report
 
-        print()
-        build_report.summarize(build_report.render())
+    print()
+    build_report.summarize(
+        build_report.render(OUT_DIR, SCHEDULES), OUT_DIR / "index.html"
+    )
 
     if args.json:
         Path(args.json).write_text(

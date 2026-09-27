@@ -9,7 +9,8 @@
 #   predict  refit the live models on every completed game and forecast each
 #            game whose FINAL injury report is out and which has not kicked off
 #   ledger   rebuild the graded ledger page
-#   commit   any forecast record that changed, as "Forecast: <season> week <N>"
+#   commit   any forecast record that changed ("Forecast: <season> week <N>"),
+#            and the ledger page with it, verified against every record
 # Tuesdays also re-run every model's walk-forward backtest (the full re-benchmark)
 # and write the model report.
 #
@@ -112,13 +113,22 @@ jobs:
       # Runs even if a later part of the pipeline step failed: a forecast is
       # written only after every test has passed and every model has fitted, so
       # a record on disk is a valid one -- a broken ledger page must not keep it
-      # from being recorded before kickoff.
-      - name: Commit changed forecasts
+      # from being recorded before kickoff. The page goes in with the records,
+      # but only if it verifies against them; if it does not, the records are
+      # still committed and the step fails, so nobody is shown a wrong page.
+      - name: Commit changed forecasts and the ledger
         if: ${{ !cancelled() && env.PUBLISH == 'true' }}
         run: |
           git add data/predictions/*.parquet
+          ledger_ok=true
+          if python -m src.predict.build_report --check; then
+            git add data/predictions/index.html
+          else
+            ledger_ok=false
+            echo "::error::the ledger page does not match the records; committing the records without it"
+          fi
           if git diff --cached --quiet; then
-            echo "No forecast changed. Nothing to commit."
+            echo "No forecast or grade changed. Nothing to commit."
             if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
               # Prove this token can push now, so the first real forecast is
               # not the test: a throwaway branch, created and deleted.
@@ -127,10 +137,18 @@ jobs:
               git push -q origin --delete "$ref"
               echo "Push access verified."
             fi
+            [ "$ledger_ok" = true ]
             exit 0
           fi
-          python -m src.predict.summarize --commit-message \
-            $(git diff --cached --name-only) > "$RUNNER_TEMP/message.txt"
+          records=$(git diff --cached --name-only -- 'data/predictions/*.parquet')
+          if [ -n "$records" ]; then
+            python -m src.predict.summarize --commit-message $records \
+              > "$RUNNER_TEMP/message.txt"
+          else
+            printf '%s\n\n%s\n' "Ledger: graded with the latest results (automated)" \
+              "No forecast changed. The ledger page was rebuilt from new results and verified against every record." \
+              > "$RUNNER_TEMP/message.txt"
+          fi
           echo "Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
             >> "$RUNNER_TEMP/message.txt"
           git -c user.name="$BOT" -c user.email="$BOT_EMAIL" \
@@ -138,6 +156,7 @@ jobs:
           git pull -q --rebase --autostash origin "$GITHUB_REF_NAME"
           git push -q origin "HEAD:$GITHUB_REF_NAME"
           git log -1 --format="Committed %h: %s"
+          [ "$ledger_ok" = true ]
 
       # GitHub disables a public repository's schedules after 60 days without
       # activity, and the offseason is longer than that. A commit counts.
@@ -162,11 +181,13 @@ jobs:
               exit 0
             fi
             if [ -n "$(git status --porcelain -- data/predictions)" ]; then
-              echo "Forecasts changed but were not committed (publish was off)."
-            elif git diff --quiet "$GITHUB_SHA" HEAD -- data/predictions; then
-              echo "No forecast changed in this run."
+              echo "Records or the ledger changed but were not committed (publish was off)."
+            elif ! git diff --quiet "$GITHUB_SHA" HEAD -- 'data/predictions/*.parquet'; then
+              echo "Forecasts changed and were committed: $(git log -1 --format=%h -- 'data/predictions/*.parquet')."
+            elif ! git diff --quiet "$GITHUB_SHA" HEAD -- data/predictions/index.html; then
+              echo "No forecast changed; the ledger was re-graded: $(git log -1 --format=%h -- data/predictions/index.html)."
             else
-              echo "Forecasts changed and were committed: $(git log -1 --format=%h -- data/predictions)."
+              echo "No forecast changed in this run."
             fi
             echo
             latest=$(ls data/predictions/*.parquet | sort | tail -1)

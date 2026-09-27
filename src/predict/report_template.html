@@ -455,7 +455,8 @@ function careerLines(){
   });
   const lines = [
     `${DATA.weeks.length} week${DATA.weeks.length > 1 ? "s" : ""} on file · ` +
-    `built ${DATA.built_at.slice(0,10)}`,
+    `forecasts as of ${DATA.forecasts_as_of.slice(0,10)}` +
+    (DATA.results_through ? ` · results through ${DATA.results_through}` : ""),
   ];
   if (n){
     lines.push(`Combined model, all graded games: ${won}–${n - won} ` +

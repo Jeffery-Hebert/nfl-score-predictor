@@ -147,6 +147,28 @@ def attach_prior_share(injury_rows, history) -> pd.DataFrame:
     return joined.rename(columns={"share_to_date": "prior_share"})
 
 
+def team_totals(rows: pd.DataFrame) -> pd.DataFrame:
+    """Per team-game: summed impact, and whether a starting QB is out.
+
+    Summed in a FIXED order. groupby().sum() adds a team's players in the order
+    the rows arrive, and float addition is not associative, so a pull that
+    merely reorders the injury file -- new rows for the current week -- moved
+    every historical team-game's total in its last bit. Harmless to a forecast,
+    but the content fingerprints then read 73 played games as changed
+    (2026-09-27) and every backtest as stale.
+    """
+    ordered = rows.sort_values(
+        ["game_id", "team", "gsis_id", "impact"], kind="mergesort"
+    )
+    agg = (
+        ordered.groupby(["game_id", "team"], sort=True)
+        .agg(injury_impact=("impact", "sum"), qb_out=("is_qb_out", "max"))
+        .reset_index()
+    )
+    agg["qb_out"] = agg["qb_out"].astype(float)
+    return agg
+
+
 def main():
     injuries = pd.read_parquet("data/raw/injuries.parquet")
     snaps = pd.read_parquet("data/raw/snap_counts.parquet")
@@ -208,12 +230,7 @@ def main():
         & (merged["prior_share"] >= QB_STARTER_SNAP_THRESHOLD)
     )
 
-    agg = (
-        merged.groupby(["game_id", "team"])
-        .agg(injury_impact=("impact", "sum"), qb_out=("is_qb_out", "max"))
-        .reset_index()
-    )
-    agg["qb_out"] = agg["qb_out"].astype(float)
+    agg = team_totals(merged)
 
     result = team_games[["game_id", "season", "week", "team"]].merge(
         agg, on=["game_id", "team"], how="left"

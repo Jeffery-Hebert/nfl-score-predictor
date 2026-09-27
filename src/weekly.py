@@ -49,7 +49,9 @@ import time
 
 import pandas as pd
 
-CHECKS = "not backtest_artifacts"  # everything that does not need a backtest
+# Everything that does not need a backtest. ledger_sync is left to CI: this run
+# rebuilds the page itself (step 5), so a stale committed page must not stop it.
+CHECKS = "not backtest_artifacts and not ledger_sync"
 
 
 def step(title: str, cmd: list[str]) -> None:
@@ -129,7 +131,7 @@ def main(argv=None):
     print(
         "\nDone. On GitHub the pipeline workflow commits any changed forecast. "
         "Run locally, record them before kickoff so the ledger stays "
-        "pre-registered:\n  git add data/predictions/*.parquet && git commit -m "
+        "pre-registered:\n  git add data/predictions/ && git commit -m "
         '"Forecast: <season> week <N>"'
     )
     return 0

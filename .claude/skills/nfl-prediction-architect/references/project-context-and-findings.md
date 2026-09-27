@@ -1050,6 +1050,17 @@ Operational:
   default week is now the next game NOT yet kicked off (the old rule failed every
   Tuesday before Monday night's score posted, and crashed in the offseason), and
   a re-run that reproduces a record leaves it untouched.
+- **2026-09-25/27, first days unattended.** (1) A data check assumed the old
+  Sunday-only run and failed most days (no final reports Tue/Wed/Fri; one game
+  on Monday); it now checks exactly what the next run would forecast. (2) GitHub
+  starts this repo's schedules 2-4.5 h late: two runs a day, and no forecast
+  within 15 min of kickoff. (3) The ledger page was an untracked local file, so
+  a `git pull` brought Sunday's FINAL forecasts while the page still said
+  pre-injury-report. It is now tracked, deterministic, fingerprints every record,
+  verifies itself against them, and CI (`ledger_sync`) fails if they disagree.
+  (4) injury_impact sums depended on row order (float addition), so a re-pull
+  that only reordered the injury file flagged 73 played games as changed (4e-16);
+  sums are now order-independent (`team_totals`), proven by shuffling every input.
 - Staleness is now judged by a hash of the PLAYED rows a backtest read, not mtimes.
 - The feature-build freshness gate likewise compares input fingerprints recorded
   by `build_all`, not mtimes. The composite backtest now REFUSES members that
