@@ -384,7 +384,10 @@ The page is not a snapshot of one week. It reads **every** prediction file on
 disk and shows them all, opening on the most recent:
 
 - a week that hasn't been played yet shows the live models' predictions next to
-  the market's implied score;
+  the market's implied score, and **Vs market**: the combined forecast minus the
+  betting line -- the team it rates higher than the spread does and by how much,
+  and how far its total sits from the total line (`ATL +1.9 · total +2.1`). A
+  difference, not an edge: against the closing line the model is a coin flip;
 - a week that has been played shows the same predictions with the **final score
   beside them**, how far off each model was, and whether it picked the winner;
 - the tab strip along the top pages through every week on file, each tab

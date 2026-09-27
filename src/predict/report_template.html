@@ -209,6 +209,10 @@ td.final{font-weight:600}
     margin against the sign of the real one. A model can be twenty points off and still
     have called the game, which is why the margin error sits next to the tick rather than
     replacing it.</p>
+    <p><b>Vs market</b> is the combined forecast minus the market's: the team it rates
+    higher than the spread does, by how many points, and how far its total sits from the
+    total line. It is a difference, not an edge &mdash; against the closing line this model
+    has been a coin flip.</p>
     <p><b>The market column is reference only.</b> Betting lines are never an input to
     any model &#8212; not as a feature, not as a prior, not as a sanity filter. It is the
     closing line, so a midweek prediction is being shown against a number that kept
@@ -233,6 +237,7 @@ const DATA = __DATA__;
 // the live models in config.yaml changes the page without touching this file.
 const MODELS = DATA.models;
 const COMP = DATA.composite;
+const LABEL = Object.fromEntries(MODELS);
 const fmt = n => n.toFixed(1);
 const signed = n => (n > 0 ? "+" : n < 0 ? "−" : "±") + Math.abs(n).toFixed(1);
 const slug = w => `${w.season}-w${String(w.week).padStart(2,"0")}`;
@@ -384,6 +389,7 @@ function drawHead(w){
   if (w.n_graded) cells.push(["final","Final"]);
   MODELS.forEach(([,label]) => cells.push(["", label]));
   cells.push(["mkt","Market"]);
+  cells.push(["mkt vs","Vs market"]);
   document.getElementById("head").replaceChildren(...cells.map(([cls,label]) => {
     const th = document.createElement("th");
     if (cls) th.className = cls;
@@ -436,6 +442,18 @@ function drawBody(w){
     if (g.market) mk.textContent = `${fmt(g.market.away)}–${fmt(g.market.home)}`;
     else { mk.classList.add("dash"); mk.textContent = "no line"; }
     tr.append(mk);
+
+    const vs = document.createElement("td");
+    vs.className = "mkt vs";
+    const d = vsMarket(g);
+    if (d){
+      vs.append(document.createTextNode(d.side));
+      const t = document.createElement("span");
+      t.className = "dt"; t.textContent = d.total;
+      vs.append(t);
+      vs.title = d.title;
+    } else { vs.classList.add("dash"); vs.textContent = "—"; }
+    tr.append(vs);
     return tr;
   }));
 }
@@ -542,8 +560,35 @@ function drawCards(w){
     vv.textContent = g.market ? `${fmt(g.market.away)}–${fmt(g.market.home)}` : "no line";
     row.append(kk, vv);
     c.append(row);
+
+    const d = vsMarket(g);
+    if (d){
+      const vr = document.createElement("div");
+      vr.className = "grow mk";
+      const vk = document.createElement("span"); vk.className = "k"; vk.textContent = "Vs market";
+      const vval = document.createElement("span"); vval.className = "v";
+      vval.textContent = `${d.side} · ${d.total}`;
+      vval.title = d.title;
+      vr.append(vk, vval);
+      c.append(vr);
+    }
     return c;
   }));
+}
+
+// The composite's difference from the market, as computed by
+// build_report.market_difference -- the page only formats it.
+function vsMarket(g){
+  const d = g.vs_market && g.vs_market[COMP];
+  if (!d) return null;
+  const sign = x => (x > 0 ? "+" : x < 0 ? "−" : "±") + fmt(Math.abs(x));
+  return {
+    side: d.side ? `${d.side} +${fmt(Math.abs(d.margin))}` : "side even",
+    total: `total ${sign(d.total)}`,
+    title: `${LABEL[COMP] || COMP} margin minus the spread: ${sign(d.margin)} ` +
+           `(positive = rates the home team higher than the market). ` +
+           `Total minus the total line: ${sign(d.total)}.`,
+  };
 }
 
 function render(){

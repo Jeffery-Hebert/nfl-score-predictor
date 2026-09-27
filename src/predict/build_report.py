@@ -247,6 +247,23 @@ def week_payload(path: Path, actuals: pd.DataFrame, kickoffs: pd.Series) -> dict
                 else None
             ),
         }
+        # The forecast relative to the market, per model shown (the page draws
+        # the composite's). Computed here, not in the page, so it is tested.
+        g["vs_market"] = (
+            {
+                m: market_difference(
+                    v["home"],
+                    v["away"],
+                    r["spread_line"],
+                    r["total_line"],
+                    r["home_team"],
+                    r["away_team"],
+                )
+                for m, v in models.items()
+            }
+            if pd.notna(r.get("spread_line")) and pd.notna(r.get("total_line"))
+            else None
+        )
         # Honesty flag, per GAME. A forecast written before its own kickoff is a
         # genuine pre-registered prediction; one written afterwards is still out
         # of sample (the fit only ever sees prior games) but nobody stopped it
@@ -306,6 +323,31 @@ def week_payload(path: Path, actuals: pd.DataFrame, kickoffs: pd.Series) -> dict
         "summary": summary,
         "games": games,
     }
+
+
+def market_difference(home, away, spread, total, home_team, away_team):
+    """How far a forecast sits from the betting market, in the market's terms.
+
+      margin  (home - away) - spread_line. nflverse's spread_line is the HOME
+              team's expected margin (positive = home favoured), so a positive
+              difference means the model rates the home team higher than the
+              market does, a negative one the away team.
+      total   (home + away) - total_line. Positive: the model expects more
+              points than the market.
+      side    the team the model rates higher than the market does, by
+              |margin| points; None when they agree exactly.
+
+    Rounded to one decimal, like every forecast, so float noise (3.6 - 5.5 =
+    -1.9000000000000004) never reaches the page. None when there is no line.
+    A difference, not an edge: against the closing line the model has been a
+    coin flip (README section 9).
+    """
+    if any(pd.isna(x) for x in (home, away, spread, total)):
+        return None
+    margin = round((float(home) - float(away)) - float(spread), DP) + 0.0
+    diff_total = round((float(home) + float(away)) - float(total), DP) + 0.0
+    side = home_team if margin > 0 else away_team if margin < 0 else None
+    return {"margin": margin, "total": diff_total, "side": side}
 
 
 def records(pred_dir=PRED_DIR) -> list[Path]:
@@ -413,6 +455,18 @@ def verify(path=None, pred_dir=PRED_DIR) -> list[str]:
                 if page is None or [page["away"], page["home"]] != stored:
                     problems.append(
                         f"{label}: {m} is {page} on the page, {stored} on file"
+                    )
+                if pd.isna(r.get("spread_line")) or pd.isna(r.get("total_line")):
+                    continue
+                # Recomputed here from the record, not via market_difference.
+                a_pts, h_pts = stored
+                margin = round(h_pts - a_pts - float(r["spread_line"]), DP)
+                total = round(h_pts + a_pts - float(r["total_line"]), DP)
+                vs = (g.get("vs_market") or {}).get(m) or {}
+                if (vs.get("margin"), vs.get("total")) != (margin, total):
+                    problems.append(
+                        f"{label}: {m} vs market is {vs or None} on the page; "
+                        f"the record gives margin {margin:+.1f}, total {total:+.1f}"
                     )
     return problems
 

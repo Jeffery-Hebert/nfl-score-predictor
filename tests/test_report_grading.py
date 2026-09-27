@@ -594,3 +594,126 @@ def test_the_committed_ledger_matches_the_committed_records():
     from src.predict.build_report import verify
 
     assert verify() == []
+
+
+# ------------------------------------------------------------ vs market --
+
+# The ledger's "Vs market" column: the combined forecast minus the betting
+# market, as a margin (against the spread) and a total (against the total
+# line). nflverse's spread_line is the HOME team's expected margin, so
+# positive = home favoured -- the sign every case below pins down.
+
+
+class TestMarketDifference:
+    @staticmethod
+    def diff(home, away, spread, total, home_team="HOME", away_team="AWAY"):
+        from src.predict.build_report import market_difference
+
+        return market_difference(home, away, spread, total, home_team, away_team)
+
+    def test_thursday_night_of_week_3(self):
+        # Combined ATL 21.0 - GB 24.6: GB by 3.6 against GB -5.5, and 45.6
+        # points against 43.5. The model likes ATL 1.9 points more than the
+        # market does, and expects 2.1 more points.
+        assert self.diff(24.6, 21.0, 5.5, 43.5, "GB", "ATL") == {
+            "margin": -1.9,
+            "total": 2.1,
+            "side": "ATL",
+        }
+
+    def test_rating_the_home_team_higher_is_positive(self):
+        # KC by 7 against KC -3, and 47 points against 45.
+        assert self.diff(27.0, 20.0, 3.0, 45.0, "KC", "DEN") == {
+            "margin": 4.0,
+            "total": 2.0,
+            "side": "KC",
+        }
+
+    def test_an_away_favourite_line(self):
+        # CAR is favoured (spread -2.5); the model has CAR by 2.9 -- 0.4 more.
+        assert self.diff(20.7, 23.6, -2.5, 42.5, "CLE", "CAR") == {
+            "margin": -0.4,
+            "total": 1.8,
+            "side": "CAR",
+        }
+
+    def test_fewer_points_than_the_market_is_negative(self):
+        assert self.diff(20.1, 22.0, -3.5, 42.5, "PIT", "CIN")["total"] == -0.4
+
+    def test_agreement_is_zero_and_names_no_side(self):
+        import math
+
+        d = self.diff(24.0, 21.0, 3.0, 45.0)
+        assert d == {"margin": 0.0, "total": 0.0, "side": None}
+        # never "-0.0" on the page
+        assert math.copysign(1, d["margin"]) == 1 and math.copysign(1, d["total"]) == 1
+
+    @pytest.mark.parametrize("spread, total", [(float("nan"), 43.5), (5.5, None)])
+    def test_no_line_means_no_difference(self, spread, total):
+        assert self.diff(24.6, 21.0, spread, total) is None
+
+    def test_float_noise_never_reaches_the_page(self):
+        # 3.6 - 5.5 is -1.9000000000000004 in floating point.
+        assert repr(self.diff(24.6, 21.0, 5.5, 43.5)["margin"]) == "-1.9"
+
+    def test_it_agrees_with_exact_decimal_arithmetic(self):
+        from decimal import Decimal
+        import random
+
+        rng = random.Random(0)
+        for _ in range(500):
+            home = Decimal(rng.randint(50, 400)) / 10  # forecasts: tenths
+            away = Decimal(rng.randint(50, 400)) / 10
+            spread = Decimal(rng.randint(-40, 40)) / 2  # lines: half points
+            total = Decimal(rng.randint(60, 120)) / 2
+            want_margin = (home - away) - spread
+            want_total = (home + away) - total
+            d = self.diff(
+                float(home), float(away), float(spread), float(total), "H", "A"
+            )
+            assert Decimal(str(d["margin"])) == want_margin
+            assert Decimal(str(d["total"])) == want_total
+            assert d["side"] == (
+                "H" if want_margin > 0 else "A" if want_margin < 0 else None
+            )
+
+
+class TestVsMarketOnThePage:
+    def test_every_model_on_the_page_carries_its_difference(self, tmp_path):
+        from src.predict.build_report import market_difference
+
+        path, actuals = fake_week(tmp_path, "2025-09-06T12:00:00+00:00")
+        w = week_payload(path, actuals, NO_KICKOFFS)
+        for g in w["games"]:
+            for m, p in g["models"].items():
+                assert g["vs_market"][m] == market_difference(
+                    p["home"], p["away"], 3.0, 45.0, g["home"], g["away"]
+                )
+        # combined 20-27 against the home side -3 and 45: home +4.0, total +2.0
+        assert w["games"][0]["vs_market"]["combined"] == {
+            "margin": 4.0,
+            "total": 2.0,
+            "side": w["games"][0]["home"],
+        }
+
+    def test_a_game_without_a_line_has_none(self, tmp_path):
+        path, actuals = fake_week(tmp_path, "2025-09-06T12:00:00+00:00")
+        df = pd.read_parquet(path)
+        df["spread_line"] = float("nan")
+        df.to_parquet(path, index=False)
+        w = week_payload(path, actuals, NO_KICKOFFS)
+        assert all(g["vs_market"] is None for g in w["games"])
+
+    def test_the_verifier_recomputes_it_from_the_record(self, tmp_path):
+        from src.predict.build_report import verify
+
+        d = ledger_dir(tmp_path)
+        df = pd.read_parquet(d / "2026_wk03.parquet")
+        df["spread_line"], df["total_line"] = 5.5, 43.5
+        df["market_home"], df["market_away"] = 24.5, 19.0  # as predict_week stores
+        df.to_parquet(d / "2026_wk03.parquet", index=False)
+        render(d)
+        assert verify(pred_dir=d) == []
+        page = d / "index.html"
+        page.write_text(page.read_text().replace('"margin":-1.9', '"margin":1.9', 1))
+        assert any("vs market" in p for p in verify(pred_dir=d))
