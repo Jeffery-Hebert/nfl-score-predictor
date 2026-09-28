@@ -608,6 +608,7 @@ Recorded so nobody rebuilds them:
 | Quarterback-specific historical stats | No effect |
 | Pace, turnover luck, special teams | Worse |
 | Penalties (yards committed, EPA lost on flagged plays) | Worse -- mostly noise (see below) |
+| Travel: distance, time zones crossed, body-clock kickoff time, road streaks, international trips | Worse -- patterns don't carry from season to season |
 | Weather | Not usable — see below |
 
 **The pass/rush split came back.** It is the one rejected idea that has since

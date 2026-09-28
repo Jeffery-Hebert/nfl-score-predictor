@@ -39,6 +39,20 @@ All of the following were built, leakage-tested, and evaluated via standalone fa
    do not re-propose without a new mechanism (e.g. a stable sub-type such as
    offensive pre-snap flags).
 
+7. **Travel intensity (2026-09-28)** -- every venue in schedules (51, incl. London,
+   Munich, Frankfurt, Paris, Madrid, Mexico City, Sao Paulo, Rio, Melbourne) mapped
+   to coordinates and IANA time zone; each team's home base = its most-used home
+   venue that season. Per team-game: km travelled, time zones crossed (signed,
+   DST-aware at kickoff), body-clock kickoff hour, West-team-before-11am flag,
+   body-clock gap between the teams, consecutive road games, international trip.
+   Walk-forward residual screen on the composite, 2022-2026: distance +0.019,
+   time zones +0.012, early body clock +0.020 [+0.001, +0.041], body-clock gap
+   +0.012, road streak +0.017, all together +0.032 -- none helps, one clearly
+   worse. In-sample patterns exist (West teams visiting the East beat the model's
+   margin by ~3 pts over 107 games; coast-to-coast visitors +1.6) but a correction
+   fitted on earlier seasons hurts later ones: team-strength coincidence, not a
+   stable travel cost. The home-field term already carries the average one.
+
 ## A5 Finding (2026-09-14): The Stack Does Not Earn Its Place
 
 Measured on a clean full-pipeline rebuild, all models re-run on identical
