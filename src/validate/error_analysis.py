@@ -29,8 +29,14 @@ def discover_models() -> dict[str, str]:
     return {p.name.replace("_predictions.parquet", ""): str(p) for p in found}
 
 
-def analyze(preds_path: str, label: str):
+def analyze(preds_path: str, label: str, season: int | None = None):
     df = pd.read_parquet(preds_path)
+    if season is not None:
+        df = df[df["season"] == season].reset_index(drop=True)
+        label = f"{label} -- {season} season, {len(df)} games"
+        if df.empty:
+            print(f"\n{label}: no games")
+            return
     df["home_error"] = df["home_pred"] - df["home_score"]
     df["away_error"] = df["away_pred"] - df["away_score"]
     df["margin_actual"] = df["home_score"] - df["away_score"]
@@ -111,6 +117,7 @@ def main(argv=None):
     ap.add_argument(
         "--list", action="store_true", help="list available models and exit"
     )
+    ap.add_argument("--season", type=int, default=None, help="one season only")
     args = ap.parse_args(argv)
 
     if args.list:
@@ -140,7 +147,7 @@ def main(argv=None):
         targets = [(p, n) for n, p in available.items()]
 
     for path, label in targets:
-        analyze(path, label)
+        analyze(path, label, args.season)
     return 0
 
 

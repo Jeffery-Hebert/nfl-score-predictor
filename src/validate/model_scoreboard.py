@@ -139,6 +139,7 @@ def main(argv=None):
         action="store_true",
         help="restrict every model to the games ALL of them share",
     )
+    ap.add_argument("--season", type=int, default=None, help="one season only")
     args = ap.parse_args(argv)
 
     found = discover()
@@ -149,6 +150,13 @@ def main(argv=None):
         return 1
 
     frames = {n: pd.read_parquet(found[n]) for n in names}
+    if args.season is not None:
+        frames = {n: f[f["season"] == args.season] for n, f in frames.items()}
+        frames = {n: f.reset_index(drop=True) for n, f in frames.items() if len(f)}
+        if not frames:
+            print(f"ERROR: no predictions for season {args.season}.")
+            return 1
+        print(f"Season {args.season} only.\n")
 
     if args.common_games:
         shared = set.intersection(*(set(f["game_id"]) for f in frames.values()))

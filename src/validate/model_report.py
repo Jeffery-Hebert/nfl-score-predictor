@@ -438,10 +438,26 @@ def market_comparison(df: pd.DataFrame, n_boot: int) -> pd.DataFrame:
         )
         live_t = true_total != g["total_line"]
         ou = ((pred_total > g["total_line"]) == (true_total > g["total_line"]))[live_t]
+        # The line as a score: half the total, minus/plus half the spread.
+        mkt_home = (g["total_line"] + g["spread_line"]) / 2
+        mkt_away = (g["total_line"] - g["spread_line"]) / 2
         rows.append(
             {
                 "model": m,
                 "games": len(g),
+                "model_score_rmse": rmse(
+                    np.concatenate(
+                        [
+                            g["home_pred"] - g["home_score"],
+                            g["away_pred"] - g["away_score"],
+                        ]
+                    )
+                ),
+                "market_score_rmse": rmse(
+                    np.concatenate(
+                        [mkt_home - g["home_score"], mkt_away - g["away_score"]]
+                    )
+                ),
                 "model_margin_rmse": rmse(pred_margin - true_margin),
                 "market_margin_rmse": rmse(g["spread_line"] - true_margin),
                 "model_total_rmse": rmse(pred_total - true_total),
@@ -592,6 +608,7 @@ th{position:sticky;top:0;background:var(--card)}td:first-child,th:first-child{te
 
 
 def write_html(sections: list[tuple[str, str, pd.DataFrame]], path: Path, header: str):
+    sections = [sec for sec in sections if len(sec[2])]
     parts = [HTML_HEAD, header]
     for title, blurb, table in sections:
         parts.append(f"<h2>{title}</h2><p>{blurb}</p>")
@@ -608,6 +625,12 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--models", nargs="*", default=None)
     ap.add_argument("--boot", type=int, default=N_BOOT)
+    ap.add_argument(
+        "--season",
+        type=int,
+        default=None,
+        help="report on one season only (written to reports/season_<N>/)",
+    )
     args = ap.parse_args(argv)
 
     models = args.models or available_models()
@@ -623,6 +646,19 @@ def main(argv=None):
         print(f"WARNING: {m} backtest is stale -- {s[0]}")
 
     full = load_long(models)
+    out_dir = REPORT_DIR
+    if args.season is not None:
+        full = full[full["season"] == args.season]
+        if full.empty:
+            print(f"ERROR: no backtest predictions for season {args.season}.")
+            return 1
+        out_dir = REPORT_DIR / f"season_{args.season}"
+        n_weeks = full["block"].nunique()
+        print(
+            f"SEASON {args.season} ONLY: {full['game_id'].nunique()} games in "
+            f"{n_weeks} week(s). Intervals resample those {n_weeks} weeks -- "
+            "expect them to be wide.\n"
+        )
     shared = common_games(full)
     df = full[full["game_id"].isin(shared) & ~full["model"].isin(OWN_GAMES_ONLY)]
     print(
@@ -648,11 +684,17 @@ def main(argv=None):
     from src.config import live_settings
 
     members = live_settings()["composite"]["members"]
-    comp = composite_alternatives(
-        full[~full["model"].isin(OWN_GAMES_ONLY)], members, args.boot
+    # Weighting schemes are fitted on earlier weeks; within one season there
+    # are too few to fit anything, so the season report leaves them out.
+    comp = (
+        composite_alternatives(
+            full[~full["model"].isin(OWN_GAMES_ONLY)], members, args.boot
+        )
+        if args.season is None
+        else pd.DataFrame()
     )
 
-    REPORT_DIR.mkdir(parents=True, exist_ok=True)
+    out_dir.mkdir(parents=True, exist_ok=True)
     tables = {
         "leaderboard": lb,
         "miss_distribution": miss,
@@ -668,7 +710,7 @@ def main(argv=None):
         "composite_alternatives": comp,
     }
     for name, t in tables.items():
-        t.to_csv(REPORT_DIR / f"{name}.csv", index=False)
+        t.to_csv(out_dir / f"{name}.csv", index=False)
 
     # --------------------------------------------------------- terminal summary
     pd.set_option("display.width", 200)
@@ -757,13 +799,19 @@ def main(argv=None):
         )
         print(comp.round(4).to_string(index=False))
 
+    scope = f" -- {args.season} season only" if args.season is not None else ""
     header = (
-        "<h1>Model report</h1><p>Every saved walk-forward backtest, broken down by "
+        f"<h1>Model report{scope}</h1><p>Every saved walk-forward backtest, broken down by "
         f"where and how it misses. <b>{len(shared)}</b> games shared by every model "
         f"({', '.join(m for m in models if m not in OWN_GAMES_ONLY)}); stacking is "
         "scored on its own games. Error = prediction minus result (positive = "
         "predicted too high). Confidence intervals resample whole weeks.</p>"
     )
+    if args.season is not None:
+        header += (
+            f"<p><b>One season:</b> {len(shared)} games in {n_weeks} week(s). "
+            "Every interval resamples only those weeks, so treat them as rough.</p>"
+        )
     if stale:
         header += (
             "<p><b>Stale backtests:</b> "
@@ -825,10 +873,10 @@ def main(argv=None):
                 comp,
             ),
         ],
-        REPORT_DIR / "model_report.html",
+        out_dir / "model_report.html",
         header,
     )
-    print(f"\nFull report: {REPORT_DIR / 'model_report.html'}  (CSV tables beside it)")
+    print(f"\nFull report: {out_dir / 'model_report.html'}  (CSV tables beside it)")
     return 0
 
 

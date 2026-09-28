@@ -341,6 +341,21 @@ python -m src.validate.model_scoreboard --common-games
 python -m src.validate.error_analysis
 ```
 
+Each of the three takes `--season 2026` to judge one season on its own (the
+report then goes to `data/processed/reports/season_2026/`). And for the
+forecasts that were actually published, rather than the backtest:
+
+```bash
+python -m src.validate.live_report --season 2026
+```
+
+That grades every record in `data/predictions/` against the results and the
+market: accuracy next to the market's own implied score, each model's spread and
+total picks won-lost-push (against the line when forecast and against the close),
+and closing-line value -- how far the line moved toward each pick after it was
+published, the standard test of whether a forecast knows something the market
+doesn't. Backfilled forecasts are graded but kept out of that last one.
+
 `run_all` runs all 17 backtests (every production, shelved and experimental
 model plus the stack and the composite) in dependency order, 4 at a time, with
 a log per model in `data/processed/logs/`. It takes about 40 minutes, most of
