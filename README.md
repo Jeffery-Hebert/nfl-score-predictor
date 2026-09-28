@@ -607,6 +607,7 @@ Recorded so nobody rebuilds them:
 | Adjusting stats for opponent strength | No effect |
 | Quarterback-specific historical stats | No effect |
 | Pace, turnover luck, special teams | Worse |
+| Penalties (yards committed, EPA lost on flagged plays) | Worse -- mostly noise (see below) |
 | Weather | Not usable — see below |
 
 **The pass/rush split came back.** It is the one rejected idea that has since
@@ -642,6 +643,16 @@ Result: **the regression is gone and a small improvement appears, but it is
 still inside the noise band** (Ridge −0.012, 95% CI [−0.034, +0.011]). It was
 shipped anyway as a deliberate call. Honest summary: it no longer hurts, it
 probably helps slightly, and the project cannot prove it.
+
+**Penalties are mostly officiating and chance.** No feature uses them directly;
+they reach the model only through points and success rate, since the pass/rush
+efficiency numbers leave out the ~75% of flags that wipe a play out. Screened
+2026-09-28: a team's penalty yards in odd-numbered games barely predict its
+even-numbered games (split-half r = 0.11; penalty EPA 0.11-0.18), and
+correcting the backtest with leakage-safe rolling penalty numbers made every
+later season worse (+0.016 to +0.025 RMSE, intervals clear of zero). A
+residual screen rather than the full walk-forward experiment, but with that
+little signal there is nothing for a model to find.
 
 **Weather deserves explaining.** Historical weather is what *actually
 happened*. But to predict a future game you'd only have a *forecast*, which is

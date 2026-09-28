@@ -28,6 +28,17 @@ All of the following were built, leakage-tested, and evaluated via standalone fa
 
 **Aggregate conclusion from this line of investigation:** five distinct, well-motivated feature ideas, tested across four model architectures with proper leakage safety and statistical rigor, produced zero confirmed improvements and one confirmed (small) regression. This suggests granular decomposition/adjustment of the *existing* box-score/EPA data has limited remaining headroom for these model classes — not that football context doesn't matter, but that these specific cuts of already-available information don't clear the bar. Before retrying variations in this family, have a specific, new reason to expect a different result.
 
+6. **Penalties (2026-09-28)** -- penalty yards committed/drawn and EPA on nullified
+   (`no_play`) plays, EWM per team (halflife 17 games, prior games only). Never
+   used before: the pass/rush split excludes `no_play`, where 18,026 of ~24,000
+   flags sit; points and success rate still carry them. Split-half reliability
+   within team-seasons r = 0.11 (yards), 0.18 / 0.11 (offence / defence penalty
+   EPA). Walk-forward residual screen on the composite, 2022-2026: +0.022
+   [+0.0003, +0.044] yards, +0.016 [+0.0001, +0.032] EPA, +0.025 [+0.004,
+   +0.046] both -- worse, CIs clear of zero. Screen only, not the full harness;
+   do not re-propose without a new mechanism (e.g. a stable sub-type such as
+   offensive pre-snap flags).
+
 ## A5 Finding (2026-09-14): The Stack Does Not Earn Its Place
 
 Measured on a clean full-pipeline rebuild, all models re-run on identical
