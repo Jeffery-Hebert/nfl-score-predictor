@@ -303,6 +303,22 @@ class TestWeekly:
         assert order == sorted(order)
         assert self.markers(commands.ran) == [weekly.CHECKS, "backtest_artifacts"]
 
+    def test_while_the_plays_lag_it_grades_the_results_and_stops(self, commands):
+        # pull_all exit 3: the scores are in, the play-by-play is not
+        commands.fail_on["src.ingest.pull_all"] = 3
+        assert weekly.main([]) == 0, "a normal game night is not a failure"
+        assert self.modules(commands.ran) == [
+            "src.ingest.pull_all",
+            "src.predict.build_report",
+        ]
+
+    def test_a_real_pull_error_still_stops_everything(self, commands):
+        commands.fail_on["src.ingest.pull_all"] = 1
+        with pytest.raises(SystemExit) as e:
+            weekly.main([])
+        assert e.value.code == 1
+        assert self.modules(commands.ran) == ["src.ingest.pull_all"]
+
     def test_out_of_season_it_does_nothing_and_says_so(self, commands, capsys):
         commands.mp.setattr(weekly, "games_near_now", lambda: pd.DataFrame())
         assert weekly.main(["--only-in-season"]) == 0

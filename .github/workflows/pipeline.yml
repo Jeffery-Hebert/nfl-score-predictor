@@ -180,6 +180,10 @@ jobs:
               echo "No NFL game in the last 2 days or the next 9: nothing to do."
               exit 0
             fi
+            if grep -q "^WAITING:" "$RUNNER_TEMP/pipeline.log" 2>/dev/null; then
+              echo "nflverse has the newest scores but not their play-by-play yet: results graded, features and forecasts wait for the next run."
+              echo
+            fi
             if [ -n "$(git status --porcelain -- data/predictions)" ]; then
               echo "Records or the ledger changed but were not committed (publish was off)."
             elif ! git diff --quiet "$GITHUB_SHA" HEAD -- 'data/predictions/*.parquet'; then

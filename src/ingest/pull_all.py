@@ -12,8 +12,14 @@ that silent gap into a failure with the fix attached.
 
   HARD failures (exit 1 -- do not build on this data):
     - a game that kicked off over a day ago has no final score
-    - a scored game has no play-by-play
+    - a scored game has no play-by-play, 36 hours after kickoff
     - play-by-play's final score disagrees with the schedule's
+  WAITING (exit 3 -- grade the new results, but do not build on this data):
+    - a game that JUST finished has its final score but no play-by-play yet.
+      nflverse posts scores within hours and plays later, usually by the next
+      morning, so every game night passes through this state. The results can
+      be graded (python -m src.predict.build_report needs only scores); the
+      features wait for the plays. src/weekly.py does exactly that.
   WARNINGS (reported, recorded, not fatal):
     - a scored game this season has no snap counts (injury weights lag a game)
     - the upcoming week has no injury-report rows yet
@@ -36,6 +42,10 @@ from src.ingest import manifest
 # Games that were scheduled, kicked off and will never have a final score.
 KNOWN_UNFINISHED = {"2022_17_BUF_CIN"}  # suspended after Damar Hamlin's collapse
 GRACE = pd.Timedelta(days=1)  # nflverse posts finals within hours; allow a day
+# Plays come after the score -- usually by the next morning. Within this window
+# a scored game with no plays is "waiting", not broken.
+PBP_GRACE = pd.Timedelta(hours=36)
+PBP_LAGGING = 3  # exit code: results in, play-by-play still to come
 
 
 def check(
@@ -66,12 +76,17 @@ def check(
             "have not updated; pull again later"
         )
 
-    # 2. + 3. play-by-play covers every scored game and agrees on the score
-    no_plays = sorted(set(scored["game_id"]) - set(pbp_finals.index))
-    if no_plays:
+    # 2. + 3. play-by-play covers every scored game and agrees on the score.
+    # A game that only just finished is waiting for its plays, not missing them
+    # (see PBP_GRACE); its result can be graded, but nothing can be built on it.
+    no_plays = scored[~scored["game_id"].isin(pbp_finals.index)]
+    recent = no_plays["kickoff"] > now - PBP_GRACE
+    lagging = sorted(no_plays.loc[recent, "game_id"])
+    missing = sorted(no_plays.loc[~recent, "game_id"])
+    if missing:
         errors.append(
-            f"{len(no_plays)} scored games have no play-by-play "
-            f"(e.g. {', '.join(no_plays[:4])}) -- their EPA would silently vanish "
+            f"{len(missing)} scored games have no play-by-play "
+            f"(e.g. {', '.join(missing[:4])}) -- their EPA would silently vanish "
             "from every rolling feature; pull again when nflverse catches up"
         )
     both = scored.set_index("game_id").join(pbp_finals, how="inner")
@@ -114,7 +129,7 @@ def check(
             )
 
     info["latest_final"] = str(scored["gameday"].max()) if len(scored) else None
-    return {"errors": errors, "warnings": warnings, "info": info}
+    return {"errors": errors, "warnings": warnings, "lagging": lagging, "info": info}
 
 
 def validate(now: pd.Timestamp | None = None) -> dict:
@@ -157,6 +172,16 @@ def report(result: dict) -> int:
     if result["errors"]:
         print("\nRaw data is NOT safe to build on. Nothing downstream was changed.")
         return 1
+    lagging = result.get("lagging") or []
+    if lagging:
+        print(
+            f"\nWAITING: {len(lagging)} game(s) that just finished have a final score "
+            f"but no play-by-play yet (e.g. {', '.join(lagging[:4])}). nflverse "
+            "publishes plays after scores, usually by the next morning.\n"
+            "The results are in: grade them with  python -m src.predict.build_report\n"
+            "Do not rebuild features or forecast until the plays arrive."
+        )
+        return PBP_LAGGING
     print("\nRaw data complete and consistent.")
     return 0
 

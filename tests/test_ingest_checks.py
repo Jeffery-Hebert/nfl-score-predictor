@@ -68,6 +68,41 @@ def test_a_scored_game_without_plays_is_an_error():
     assert any("no play-by-play" in e and "g2" in e for e in r["errors"])
 
 
+def test_a_game_that_just_finished_waits_for_its_plays():
+    """Every game night: nflverse posts the score within hours, the plays by
+    the next morning. That is a wait, not a fault -- the run of 2026-09-27
+    stopped here and left Sunday's results ungraded."""
+    s = sched(("g1", "2026-09-20T17:00", 24, 17), ("late", "2026-09-24T08:00", 20, 10))
+    r = check(s, finals(g1=(24, 17)), {"g1", "late"}, INJ, NOW)  # 10 hours on
+    assert r["errors"] == []
+    assert r["lagging"] == ["late"]
+
+
+def test_plays_still_missing_36_hours_on_are_an_error():
+    s = sched(("g1", "2026-09-20T17:00", 24, 17), ("late", "2026-09-23T05:00", 20, 10))
+    r = check(s, finals(g1=(24, 17)), {"g1", "late"}, INJ, NOW)  # 37 hours on
+    assert any("no play-by-play" in e and "late" in e for e in r["errors"])
+    assert r["lagging"] == []
+
+
+@pytest.mark.parametrize(
+    "errors, lagging, code", [([], [], 0), ([], ["g9"], 3), (["x"], ["g9"], 1)]
+)
+def test_the_exit_code_says_what_is_safe(errors, lagging, code, capsys):
+    """0: build on it. 3: grade the results, build nothing. 1: touch nothing.
+    A real error wins over waiting."""
+    from src.ingest.pull_all import PBP_LAGGING, report
+
+    result = {"errors": errors, "warnings": [], "lagging": lagging, "info": {}}
+    assert report(result) == code
+    assert PBP_LAGGING == 3
+    if code == 3:
+        assert (
+            "grade them with  python -m src.predict.build_report"
+            in capsys.readouterr().out
+        )
+
+
 def test_a_score_disagreement_between_sources_is_an_error():
     s = sched(("g1", "2026-09-20T17:00", 24, 17))
     r = check(s, finals(g1=(24, 14)), {"g1"}, INJ, NOW)

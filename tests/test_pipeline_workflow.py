@@ -103,6 +103,12 @@ class TestTheWorkflow:
         assert phrase in run_text(wf)
         assert phrase in Path("src/weekly.py").read_text()
 
+    def test_the_waiting_phrase_matches_what_pull_all_prints(self, wf):
+        assert "^WAITING:" in run_text(wf)
+        assert (
+            'f"\\nWAITING: {len(lagging)}' in Path("src/ingest/pull_all.py").read_text()
+        )
+
     def test_records_and_a_verified_ledger_are_all_that_is_committed(self, wf):
         commit = next(
             s

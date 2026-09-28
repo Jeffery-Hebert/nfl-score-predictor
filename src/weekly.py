@@ -49,20 +49,23 @@ import time
 
 import pandas as pd
 
+from src.ingest.pull_all import PBP_LAGGING
+
 # Everything that does not need a backtest. ledger_sync is left to CI: this run
 # rebuilds the page itself (step 5), so a stale committed page must not stop it.
 CHECKS = "not backtest_artifacts and not ledger_sync"
 
 
-def step(title: str, cmd: list[str]) -> None:
+def step(title: str, cmd: list[str], allowed=(0,)) -> int:
     print(f"\n{'=' * 72}\n{title}\n  $ {' '.join(cmd)}\n{'=' * 72}", flush=True)
     t0 = time.time()
     rc = subprocess.run(cmd).returncode
-    if rc != 0:
+    if rc not in allowed:
         print(f"\nSTOPPED: '{title}' failed (exit {rc}) after {time.time() - t0:.0f}s.")
         print("Nothing after this step ran. Fix the error above and re-run.")
         sys.exit(rc)
     print(f"-- {title}: ok ({time.time() - t0:.0f}s)")
+    return rc
 
 
 def games_near_now(now=None) -> pd.DataFrame:
@@ -108,7 +111,25 @@ def main(argv=None):
         print(f"{len(near)} game(s) within 2 days back / 9 ahead: running.")
 
     if not args.skip_pull:
-        step("1. Pull and validate raw data", [py, "-m", "src.ingest.pull_all"])
+        rc = step(
+            "1. Pull and validate raw data",
+            [py, "-m", "src.ingest.pull_all"],
+            allowed=(0, PBP_LAGGING),
+        )
+        if rc == PBP_LAGGING:
+            # Every game night: the scores are out, the plays are not. Grade the
+            # results now; building on data with plays missing would silently
+            # drop those games from every feature, so that waits for next run.
+            step(
+                "5. Grade the new results (features and forecasts wait for the plays)",
+                [py, "-m", "src.predict.build_report"],
+            )
+            print(
+                "\nResults graded. nflverse has not published play-by-play for the "
+                "newest games yet, so features and forecasts were left as they are; "
+                "the next run picks them up."
+            )
+            return 0
     step("2. Build features", [py, "-m", "src.features.build_all"])
     pytest_step("3. Test the code and the built data", CHECKS)
     if args.backtest:
