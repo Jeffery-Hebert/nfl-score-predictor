@@ -1097,3 +1097,49 @@ Operational:
 
 Stale-experiment repairs: `tune_halflife.py` (now reproduces production exactly at
 17 weeks), `test_offseason_decay.py`, `test_injury_features.py`.
+
+## Success Rate Measured on Scrimmage Snaps (2026-10-01)
+
+A DEFECT, not a feature idea. `build_team_game_stats.py` took
+`off_success_rate` / `def_success_rate_allowed` -- and the blended EPA per play
+and play counts beside them -- over every row with a `play_type`. 23% of those
+rows were not snaps: kickoffs (credited to the receiving team), punts, extra
+points (94% success), field goals (85%), kneels (0.5%), spikes and
+penalty-nullified plays. So two of the 24 model inputs partly counted scoring --
+the part of the old rate that scrimmage success does not explain correlates
+0.22 with that game's points -- next to a points feature the model already had.
+It was also MORE persistent for that reason (odd vs even games within a
+team-season, r = 0.52 against 0.41 for scrimmage snaps): persistence borrowed
+from the scoring it double-counted.
+
+Fixed by `scrimmage_snaps()`: play_type pass or run (sacks and scrambles
+included), the filter the pass/rush split has always used. Only the six
+per-snap columns of team_game_stats and the four success-rate features of
+model_table changed; split_efficiency, injury_features and every other model
+input are byte-identical.
+
+Measured by `src/experiments/test_success_rate_definition.py` against
+production itself (its control arm rebuilt production's model_table exactly and
+reproduced the production backtests to 0 / 7e-15). 1,472 games, week-block
+bootstrap, RMSE delta vs control:
+
+| model | scrimmage (shipped) | dropback_rush (nflfastR: + nullified snaps) |
+|---|---|---|
+| Ridge | -0.0092 [-0.023, +0.005] | -0.0063 |
+| Poisson | -0.0065 [-0.022, +0.009] | -0.0039 |
+| GP | -0.0104 [-0.025, +0.005] | -0.0072 |
+| composite | **-0.0078 [-0.021, +0.006]**, P(better) 87% | -0.0048, 76% |
+
+Composite margin RMSE 13.039 -> 13.016, total RMSE unchanged, bias 0.188 ->
+0.123, calibration slope 0.987 -> 0.990. By season: worse in 2021 (+0.026) and
+2026 (+0.017, 47 games), better 2022-2025. Decision rule fixed before the GP
+arms finished: composite first, then every member moving the same way, then
+simplicity; scrimmage wins all three. It does NOT clear the bootstrap gate --
+shipped as the correction of a mislabelled input, on the same footing as the
+pass/rush split v2. Do not re-propose counting nullified snaps: worse than
+leaving them out on every model.
+
+Tests: `tests/test_team_game_stats_snaps.py` (16, synthetic; the old filter
+fails 13, the nflfastR filter 5) and four data gates in
+`tests/test_team_game_stats.py` that check the built table against
+play-by-play, including offence == the opponent's defence on every game.

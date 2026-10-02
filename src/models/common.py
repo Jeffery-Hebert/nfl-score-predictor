@@ -31,6 +31,13 @@ the contract.
 # Success rate is NOT split and stays blended -- it is the most persistent thing
 # the project measures (split-half r = 0.695) and nothing about it is duplicated
 # by the EPA columns.
+#
+# Since 2026-10-01 both success rates are measured on SNAPS FROM SCRIMMAGE only
+# (build_team_game_stats.scrimmage_snaps). Before that they included kickoffs,
+# punts, extra points, field goals, kneels and nullified snaps -- 23% of the
+# plays -- so the "offensive" rate partly counted scoring (extra points succeed
+# 94% of the time). The 0.695 above was measured on that older definition.
+# Measured in src/experiments/test_success_rate_definition.py.
 BASE_FEATURE_COLS = [
     "pregame_team_score",
     "pregame_opp_score",

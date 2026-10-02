@@ -68,9 +68,10 @@ Why it beats yards: a 4-yard gain on 3rd-and-2 (keeps your drive alive) and a
 4-yard gain on 3rd-and-15 (ends it) are identical in yards and opposite in
 value. EPA knows the difference.
 
-**Success rate** — the share of plays with positive EPA. EPA measures *how
-much*; success rate measures *how often*. A team with one huge play and
-nine bad ones has good EPA and terrible success rate.
+**Success rate** — the share of a team's snaps (passes and runs) with
+positive EPA. EPA measures *how much*; success rate measures *how often*. A
+team with one huge play and nine bad ones has good EPA and terrible success
+rate.
 
 **Home field advantage** — home teams win more. Worth roughly 2 points.
 
@@ -596,6 +597,31 @@ We also tested a separate "starting QB is out" flag. It made things **worse**
 when added alongside, because a missing QB already dominates the impact number.
 Two features fighting over the same signal is worse than one clean feature.
 
+### Success rate measures the offence now, not the kicking team
+
+Two of the model's inputs are each team's recent **success rate**, on offence
+and on defence. Until October 2026 it was taken over *every* play — kickoffs,
+punts, extra points, field goals and kneel-downs included, 23% of the plays.
+Those aren't neutral: an extra point "succeeds" 94% of the time, so a team that
+scored a lot of touchdowns looked more *efficient*, double-counting the points
+number right next to it, and a team kneeling out a win looked less so.
+
+Both rates are now measured on snaps from scrimmage only — passes, sacks, runs
+and scrambles. Three definitions went through the full walk-forward against
+production itself (`src/experiments/test_success_rate_definition.py`). Change in
+typical error per team score; negative is better:
+
+| Definition | Ridge | Poisson | GP | Combined (published) |
+|---|---|---|---|---|
+| **Scrimmage snaps only** — shipped | −0.009 | −0.007 | −0.010 | **−0.008** |
+| Also counting snaps wiped out by a penalty (nflfastR's convention) | −0.006 | −0.004 | −0.007 | −0.005 |
+
+Every model improved and the margin error improved with it, but no version
+clears the bootstrap test on its own (the published model is better in 87% of
+redraws). Like the pass/rush split, it shipped as the correction of an input
+that measured the wrong thing, with a small and consistent gain — not as a
+proven one.
+
 ### Ideas that were tested and rejected
 
 Recorded so nobody rebuilds them:
@@ -670,7 +696,7 @@ nothing, and can never beat Vegas. Odds are used only as a scoreboard.
 
 ## 8. Testing philosophy
 
-About 725 tests (run `pytest --co -q` for the current count), in five layers.
+About 790 tests (run `pytest --co -q` for the current count), in five layers.
 CI runs every test that does not need `data/` on each push; the rest run
 locally after a build.
 

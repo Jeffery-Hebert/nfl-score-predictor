@@ -11,6 +11,10 @@ evidence, which they are not. build_split_efficiency.py needs the counts to
 weight by volume and to size its shrinkage, so they are carried here rather
 than recomputed from play-by-play a second time.
 
+Every per-play rate here -- success rate, EPA per play, and their counts -- is
+measured on SNAPS FROM SCRIMMAGE only: see scrimmage_snaps() for which plays
+those are and why special teams are left out.
+
 Run: python src/features/build_team_game_stats.py
 Output: data/processed/team_game_stats.parquet
 """
@@ -20,6 +24,10 @@ from pathlib import Path
 
 TEAM_CODE_MAP = {"OAK": "LV"}
 
+# nflverse play_type values that are snaps from scrimmage: a sack is a "pass"
+# and a quarterback scramble a "run", exactly as the pass/rush split counts them.
+SCRIMMAGE_PLAY_TYPES = ("pass", "run")
+
 
 def normalize_team_codes(df: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
     for col in cols:
@@ -27,8 +35,33 @@ def normalize_team_codes(df: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
     return df
 
 
+def scrimmage_snaps(pbp: pd.DataFrame, side: str) -> pd.DataFrame:
+    """The plays that measure an offence (side="posteam") or a defence
+    (side="defteam"): snaps from scrimmage that counted.
+
+    Until 2026-10-01 these stats were taken over EVERY row with a play_type, so
+    23% of the plays behind "offensive success rate" were not offensive snaps:
+    kickoffs (credited to the receiving team), punts, extra points, field goals,
+    kneel-downs, spikes and penalty-nullified plays. Extra points succeed 94% of
+    the time and field goals 85%, one per touchdown and per stalled drive in
+    range, so the rate partly counted SCORING -- beside a points feature the
+    model already has -- and docked teams for kneeling out a win.
+
+    Left out, deliberately:
+      special teams   kickoff, punt, extra_point, field_goal -- a different unit
+      clock plays     qb_kneel, qb_spike -- not attempts to gain anything
+      no_play         snaps wiped out by a penalty. nflfastR's own convention
+                      (pass == 1 | rush == 1) keeps the ~11,000 of these that
+                      were dropbacks or runs; it was measured as an arm of
+                      src/experiments/test_success_rate_definition.py and was
+                      no better than leaving them out, which is also what the
+                      pass/rush split below has always done.
+    """
+    return pbp[pbp["play_type"].isin(SCRIMMAGE_PLAY_TYPES) & pbp[side].notna()]
+
+
 def build_offense_stats(pbp: pd.DataFrame) -> pd.DataFrame:
-    plays = pbp[pbp["play_type"].notna() & pbp["posteam"].notna()]
+    plays = scrimmage_snaps(pbp, "posteam")
     off = (
         plays.groupby(["game_id", "posteam"])
         .agg(
@@ -69,7 +102,7 @@ def build_offense_stats(pbp: pd.DataFrame) -> pd.DataFrame:
 
 
 def build_defense_stats(pbp: pd.DataFrame) -> pd.DataFrame:
-    plays = pbp[pbp["play_type"].notna() & pbp["defteam"].notna()]
+    plays = scrimmage_snaps(pbp, "defteam")
     deff = (
         plays.groupby(["game_id", "defteam"])
         .agg(
