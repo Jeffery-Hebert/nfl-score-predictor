@@ -829,3 +829,41 @@ class TestImpliedScore:
         page = d / "index.html"
         page.write_text(page.read_text().replace('"away":19.0', '"away":21.0', 1))
         assert any("market is" in p for p in verify(pred_dir=d))
+
+
+class TestMarketCellLayout:
+    """2026-10-01: each market cell is a value with a qualifier under it ("PIT
+    −1.1" over "42.5 pts", "CLE +2.5" over "edge 1.4"). The qualifier span's
+    block rule was scoped to the matchup cell, so in the five market cells the
+    two ran together inline and "PIT −1.1" + "42.5 pts" read "−1.142.5"."""
+
+    @staticmethod
+    def css():
+        import re
+
+        from src.predict.build_report import TEMPLATE
+
+        html = TEMPLATE.read_text()
+        return re.sub(r"/\*.*?\*/", "", html.split("</style>")[0], flags=re.S)
+
+    def test_the_qualifier_sits_on_its_own_line(self):
+        import re
+
+        rule = re.search(r"td\.mkt \.dt\{([^}]*)\}", self.css())
+        assert rule, "no rule for the qualifier line in market cells"
+        assert "display:block" in rule.group(1)
+
+    def test_a_market_value_never_wraps_inside_itself(self):
+        import re
+
+        rule = re.search(r"td\.mkt\{([^}]*)\}", self.css())
+        assert rule and "white-space:nowrap" in rule.group(1)
+
+    def test_the_qualifier_is_a_separate_element_from_the_value(self):
+        """The layout depends on drawBody putting the qualifier in its own
+        .dt span after the value's text node."""
+        from src.predict.build_report import TEMPLATE
+
+        js = TEMPLATE.read_text()
+        assert "td.append(document.createTextNode(text));" in js
+        assert 's.className = "dt"; s.append(...sub);' in js

@@ -118,7 +118,12 @@ td.matchup{text-align:left;padding-left:18px;font-family:"Barlow Condensed",sans
   font-size:19px;font-weight:600;letter-spacing:.01em;white-space:nowrap}
 td.matchup .dt{display:block;font-family:"IBM Plex Sans",sans-serif;font-size:11px;
   font-weight:400;color:var(--ink-faint);letter-spacing:0;margin-top:1px}
-td.mkt{background:color-mix(in srgb,var(--accent-soft) 40%,transparent)}
+/* Each market cell is a value and, under it, its qualifier ("O/U 38.5",
+   "42.5 pts", "edge 1.4"). The .dt rule above is scoped to the matchup cell, so
+   until 2026-10-01 these ran inline: "PIT −1.1" + "42.5 pts" read "−1.142.5". */
+td.mkt{background:color-mix(in srgb,var(--accent-soft) 40%,transparent);white-space:nowrap}
+td.mkt .dt{display:block;font-family:"IBM Plex Sans",sans-serif;font-size:12px;
+  font-weight:400;color:var(--ink-soft);margin-top:3px}
 tbody tr:nth-child(even) td.mkt{background:color-mix(in srgb,var(--accent-soft) 62%,transparent)}
 td.pick{font-weight:600}td.pick .dt{font-weight:400}
 td.final{font-weight:600}
@@ -526,8 +531,9 @@ function provisionalTag(){
   const t = document.createElement("span");
   t.className = "late";
   t.textContent = "pre-injury-report";
-  t.title = "Forecast before this game's final injury report was published; " +
-            "injured players were not yet accounted for";
+  t.title = "Forecast before this game's final injury report was in the data " +
+            "(the team files it; nflverse publishes it, sometimes a day later), " +
+            "so injured players were not accounted for";
   return t;
 }
 
