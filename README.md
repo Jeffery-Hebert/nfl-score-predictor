@@ -49,6 +49,41 @@ Two honest takeaways:
 > `SQRT(AVG(POWER(actual - predicted, 2)))`. Squaring before averaging is what
 > makes one 20-point miss hurt more than four 5-point misses.
 
+### The one rule above accuracy: correct before accurate
+
+**If logic is broken, we fix it — always — even if the fix makes the model
+less accurate.** "Broken" means a calculation that is wrong, that uses
+information it could not have had yet, or that does not measure what its name
+says it measures.
+
+Why: an accuracy score is only as honest as the math behind it. If a model
+scores better *because of* a mistake, it is not a better model — we just no
+longer know what we are measuring. If your calculator adds wrong and happens to
+give you a higher test score, you still fix the calculator.
+
+What happens when we find broken logic:
+
+1. **Fix it.** No vote and no accuracy test decides this. The accuracy tests
+   in section 8 decide whether a *new idea* gets in; they never decide whether
+   broken logic stays broken.
+2. **Measure what the fix did** — better or worse — and write it down here, so a
+   number that moves is never a surprise.
+3. **Re-forecast every game that hasn't kicked off.** A forecast for a game that
+   has already started is never changed.
+4. **If the broken version was accidentally useful**, that idea can come back
+   only as its own honestly named, correctly built input — and then it has to
+   pass the normal tests like any other new idea.
+
+Real example: in October 2026, "offensive success rate" turned out to include
+kickoffs and extra points (section 7). It was fixed because it was wrong. It
+happened to make the model slightly more accurate, but it would have been fixed
+if it had made it worse.
+
+> **For dbt/SQL folks:** if a model named `net_revenue` turned out to be adding
+> refunds instead of subtracting them, you would fix the SQL even though this
+> quarter's dashboard number drops. A metric that looks better because it is
+> wrong is still wrong — and every report built on it was quietly wrong too.
+
 ---
 
 ## 2. Vocabulary you'll need
@@ -545,7 +580,12 @@ data/
                ledger page, verified against those records on every build
 ```
 
-Two conventions worth knowing:
+Three conventions worth knowing:
+
+**Broken logic is fixed, not voted on.** Section 1's rule: anything that
+calculates the wrong thing, or doesn't measure what its name says, is fixed even
+if the model gets less accurate. The fix is still measured, and the result is
+written down whichever way it goes.
 
 **Failed ideas are kept, not deleted.** `src/models/unused/` holds nine models
 that were properly built and measured and did not earn a place. Deleting them
@@ -553,9 +593,11 @@ would mean someone rebuilds them in a year. Their docstrings say what happened.
 
 **Experiments never touch production.** Testing a new idea means writing a
 standalone script in `src/experiments/` that reads production data and writes
-nothing back. Production changes only after the experiment shows the idea works.
-Experiments that rebuild a feature table use production's own assembler
-(`build_game_features.assemble`), so they can't quietly drift from it.
+nothing back. A *new idea* reaches production only after the experiment shows it
+works. A *fix* to broken logic doesn't wait for that — the experiment only
+records what the fix changed. Experiments that rebuild a feature table use
+production's own assembler (`build_game_features.assemble`), so they can't
+quietly drift from it.
 
 ---
 
@@ -616,11 +658,13 @@ typical error per team score; negative is better:
 | **Scrimmage snaps only** — shipped | −0.009 | −0.007 | −0.010 | **−0.008** |
 | Also counting snaps wiped out by a penalty (nflfastR's convention) | −0.006 | −0.004 | −0.007 | −0.005 |
 
-Every model improved and the margin error improved with it, but no version
-clears the bootstrap test on its own (the published model is better in 87% of
-redraws). Like the pass/rush split, it shipped as the correction of an input
-that measured the wrong thing, with a small and consistent gain — not as a
-proven one.
+Every model happened to improve, and the margin error with it, though no
+version clears the bootstrap test on its own (the published model is better in
+87% of redraws). **That is not why it shipped.** The old number measured the
+wrong thing, so under section 1's rule it would have been fixed even if every
+model had got worse. The table is here so you can see what the fix changed. The
+experiment chose *which* correct definition to use; it never decided *whether*
+to fix it.
 
 ### Ideas that were tested and rejected
 
@@ -713,7 +757,9 @@ locally after a build.
    ledger's grading — the sign of every error, and what counts as a correct
    pick.
 5. **Statistical honesty** — improvements smaller than ~0.05 RMSE must pass a
-   **bootstrap test** before being believed.
+   **bootstrap test** before being believed. This is how a *new idea* earns its
+   place. It is never used to decide whether to fix broken logic: a fix ships
+   even if it scores worse (section 1), and its result is recorded either way.
 
 > **What's a bootstrap test?** If a change improves error from 9.40 to 9.38, is
 > that real or luck? We re-draw the 1,426 games at random (with repeats) 5,000

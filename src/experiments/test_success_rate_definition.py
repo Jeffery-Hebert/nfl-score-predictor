@@ -64,13 +64,15 @@ bias 0.188 -> 0.123 and nudges the calibration slope 0.987 -> 0.990. By season:
 2021 +0.026, 2022 -0.017, 2023 -0.006, 2024 -0.029, 2025 -0.020, 2026 +0.017
 (47 games).
 
-Decided by a rule fixed before the GP arms finished: the composite first, then
-whether every member moves the same way, then simplicity. scrimmage wins on all
-three and SHIPPED (build_team_game_stats.scrimmage_snaps). It does not clear the
-bootstrap gate -- no arm does -- so it ships as the correction of a mislabelled
-input with a small, consistent gain, not as a proven one; the same footing the
-pass/rush split v2 shipped on. Penalty-nullified snaps (dropback_rush) were
-worse than leaving them out on every model.
+WHETHER to fix was never this experiment's question: the old rate measured
+something other than its name, and broken logic is fixed whatever it does to
+accuracy (README section 1; SKILL.md, "Correctness Before Accuracy"). The
+experiment chose WHICH correct definition, by a rule fixed before the GP arms
+finished: the composite first, then whether every member moves the same way,
+then simplicity. scrimmage wins on all three and SHIPPED
+(build_team_game_stats.scrimmage_snaps). No arm clears the bootstrap gate; none
+had to. Penalty-nullified snaps (dropback_rush) were worse than leaving them out
+on every model.
 
 Two facts behind the result. The old rate WAS partly a scoring count: the part
 of it that scrimmage success does not explain correlates 0.22 with the team's

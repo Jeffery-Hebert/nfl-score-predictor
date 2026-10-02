@@ -236,6 +236,12 @@ td.final{font-weight:600}
     <p><b>Grading never edits a prediction.</b> Each week is written to its own parquet
     the moment it is generated and is read back unchanged; the error columns are computed
     fresh from final scores at render time.</p>
+    <p><b>Broken logic always gets fixed, even if the model gets less accurate.</b> When a
+    number turns out not to measure what its name says &#8212; in October 2026,
+    &ldquo;offensive success rate&rdquo; was found to include kickoffs and extra points
+    &#8212; it is fixed, the games that haven't kicked off are forecast again, and the
+    README records what the fix did to accuracy, better or worse. A forecast for a game
+    that has already started is never changed.</p>
     <p><b>Weekly error is reported as MAE</b>, the plain average of how far each
     prediction landed from the final score. The project's headline number elsewhere is
     RMSE, which squares the misses first &#8212; useful over 1,400 games, misleading over

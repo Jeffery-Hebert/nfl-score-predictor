@@ -15,6 +15,12 @@ trusted, but the check has always been RMSE alone. A model can win on RMSE
 while being meaningfully more biased. promotion_report() reports both and
 refuses to call a model better when it trades bias for RMSE.
 
+What this gate is NOT for: deciding whether to fix broken logic. It decides
+whether a NEW model or feature earns promotion. A fix to logic that is wrong, or
+that does not measure what its name says, ships even if it scores worse here --
+"correct before accurate", README section 1. Run the gate on a fix only to
+record what the fix changed.
+
 Note on intervals: these models emit point predictions only. GP computes a
 genuine predictive sigma and gaussian_process.py discards it (the harness
 contract is (home_pred, away_pred)). So implied_interval_coverage() below

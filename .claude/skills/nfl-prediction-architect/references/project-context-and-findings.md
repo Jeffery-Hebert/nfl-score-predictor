@@ -2,6 +2,17 @@
 
 Read this fully before proposing any new feature or architectural change. It exists so past work is never silently repeated or contradicted.
 
+## Standing Rule: Correctness Before Accuracy (operator, 2026-10-02)
+
+**Logic that is fundamentally wrong, or that misrepresents what it says it represents, is ALWAYS fixed — even if the fix makes the model less accurate.** If the logic is broken it MUST be fixed. Nothing in this document — no benchmark, no closed result, no "it scored better" — is ever a reason to keep broken logic.
+
+- Broken: a bug; leakage; a feature, metric, column, label, page or docstring that measures or shows something other than what its name says; double counting; a test that cannot fail.
+- The accuracy machinery (walk-forward RMSE, the week-block bootstrap, the promotion gate) decides whether NEW IDEAS earn a place. It never decides whether a defect gets fixed. Every fix is still measured with the same harness and its effect recorded here, better or worse.
+- If the broken version carried real signal by accident, recover it only as a separate, honestly named, correctly built feature that clears the normal gate.
+- Any result in this document that was measured on logic later found broken is void until re-measured.
+- After a fix ships, games not yet kicked off are re-forecast; started games are never rewritten.
+- The README states this rule for the public (section 1, "correct before accurate"); SKILL.md states it for development.
+
 ## Current Architecture (As of Last Session)
 
 - **Repo:** `nfl-score-predictor`, Python + pandas/sklearn, walk-forward evaluation harness at `src/validate/walk_forward.py` (now with per-fold progress logging and elapsed-time reporting — added after a session where a Gaussian Process run's duration was hard to judge without it).
@@ -13,6 +24,8 @@ Read this fully before proposing any new feature or architectural change. It exi
 - **Baseline out-of-sample performance (Linear/Poisson/GP on current feature set):** home_rmse ≈ 9.52–9.54, away_rmse ≈ 9.24–9.25 (walk-forward, min_train_seasons=2, ~1,426 test games spanning 2021–2026).
 
 ## Closed Null Results — Do Not Re-Propose Without New Evidence
+
+These are closed IDEAS. None of them is a reason to keep broken logic, and any of them measured on logic later found broken is void until re-measured (see the standing rule above).
 
 All of the following were built, leakage-tested, and evaluated via standalone falsifiable experiments (never merged into production feature set) with bootstrap significance testing where the effect size warranted it:
 
@@ -1134,10 +1147,12 @@ Composite margin RMSE 13.039 -> 13.016, total RMSE unchanged, bias 0.188 ->
 0.123, calibration slope 0.987 -> 0.990. By season: worse in 2021 (+0.026) and
 2026 (+0.017, 47 games), better 2022-2025. Decision rule fixed before the GP
 arms finished: composite first, then every member moving the same way, then
-simplicity; scrimmage wins all three. It does NOT clear the bootstrap gate --
-shipped as the correction of a mislabelled input, on the same footing as the
-pass/rush split v2. Do not re-propose counting nullified snaps: worse than
-leaving them out on every model.
+simplicity; scrimmage wins all three. It does NOT clear the bootstrap gate, and
+did not need to: the old rate measured something other than its name, so under
+the standing rule (top of this document) it ships regardless of accuracy -- it
+would have shipped if every model had got worse. The experiment chose WHICH
+correct definition; it never decided WHETHER. Do not re-propose counting
+nullified snaps: worse than leaving them out on every model.
 
 Tests: `tests/test_team_game_stats_snaps.py` (16, synthetic; the old filter
 fails 13, the nflfastR filter 5) and four data gates in
