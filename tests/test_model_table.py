@@ -69,11 +69,55 @@ def test_missing_features_are_confined_to_the_first_season(df):
     for col in FEATURE_COLS:
         if col.endswith("prior_games_played"):
             continue  # a counter, defined from game one
+        if col.endswith("injury_impact"):
+            continue  # missing by design where no report exists -- next test
         rate = later[col].isna().mean()
         assert rate == 0, (
             f"{col} is {rate:.2%} NaN after the first season -- pregame features "
             "should only be missing at a team's genuine cold start"
         )
+
+
+def test_injury_impact_is_missing_only_where_no_pregame_report_exists(df):
+    """The one feature that may be missing after the first season, by design:
+    a PLAYED game whose team has no injury report published before kickoff in
+    the data -- unknown, not "healthy" (build_injury_features.unmeasurable).
+    Checked against the raw reports rather than the builder's output, so a
+    failed join cannot pass itself off as a missing report."""
+    from src.features.build_injury_features import TEAM_CODE_MAP
+    from src.schedule import kickoff_utc
+
+    sched = pd.read_parquet("data/raw/schedules.parquet")
+    sched["kickoff"] = kickoff_utc(sched)
+    inj = pd.read_parquet(
+        "data/raw/injuries.parquet", columns=["season", "week", "team", "date_modified"]
+    )
+    inj["team"] = inj["team"].replace(TEAM_CODE_MAP)
+    inj["season"] = inj["season"].astype(int)
+    inj["modified"] = pd.to_datetime(inj["date_modified"], utc=True, errors="coerce")
+
+    later = df[df["season"] > df["season"].min()]
+    played = later["home_score"].notna()
+    for side in ("home", "away"):
+        miss = later[later[f"{side}_injury_impact"].isna()]
+        assert miss["home_score"].notna().all(), (
+            f"{side}_injury_impact missing for a game not yet played -- it must "
+            "stay 0 until the final report (predict_week waits for it)"
+        )
+        teams = miss[["game_id", "season", "week", f"{side}_team"]].rename(
+            columns={f"{side}_team": "team"}
+        )
+        rows = teams.merge(sched[["game_id", "kickoff"]], on="game_id").merge(
+            inj, on=["season", "week", "team"], how="inner"
+        )
+        pregame = rows[rows["modified"].isna() | (rows["modified"] < rows["kickoff"])]
+        assert pregame.empty, (
+            f"{side}_injury_impact is missing for {pregame['game_id'].nunique()} "
+            f"games that DO have a pre-game report, e.g. "
+            f"{sorted(pregame['game_id'].unique())[:4]} -- a join is failing"
+        )
+    rate = later[["home_injury_impact", "away_injury_impact"]].isna().to_numpy()
+    assert rate.sum() / (2 * played.sum()) < 0.01, "over 1% of team-games unmeasured"
 
 
 def test_cold_start_is_the_whole_first_week_and_nothing_else(df):

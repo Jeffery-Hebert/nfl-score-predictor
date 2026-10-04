@@ -166,8 +166,10 @@ def ot_sample_weight(train):
 #     2019-2021        23.16             +0.74
 #     2024-2026        21.98             +2.12
 #
-# 2019 and 2020 were the empty-stadium seasons, where home-field advantage
-# essentially vanished (+0.04, +0.17). Carrying that forward made every model
+# In 2019 and 2020 home-field advantage essentially vanished (+0.04, +0.17).
+# Only 2020 was played in empty stadiums; 2019 had full crowds and simply had
+# an unusually small home edge. (This comment called both seasons
+# "empty-stadium" until 2026-10-04.) Carrying them forward made every model
 # over-predict away scores by about +0.75 while home scores stayed unbiased.
 #
 # Measured at 285 games (~1 NFL season) by

@@ -76,8 +76,11 @@ class TestTheWorkflow:
 
     def test_every_run_finishes_before_the_earliest_kickoff_it_serves(self, wf):
         # London games kick off 9:30am ET = 13:30 UTC in October (the earliest
-        # of the year). Sunday needs a run well before that, allowing for
-        # GitHub starting schedules late and a ~15 minute pipeline.
+        # of the year). This pins the CRON TIME only: at least 90 minutes before
+        # that kickoff. It cannot promise the run STARTS in time -- GitHub began
+        # every one of the first 19 scheduled runs 2.2 to 6.6 hours late
+        # (2026-09-25 to 10-03), so in practice London games are forecast by
+        # Saturday's runs on Friday's final report, and this run only refreshes.
         sunday = [
             c
             for c in crons(wf)

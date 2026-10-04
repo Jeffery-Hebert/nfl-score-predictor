@@ -159,7 +159,7 @@ class TestLoadSeasons:
             return "ok"
 
         yr = date.today().year
-        assert load_seasons(loader, [yr - 2, yr - 1, yr]) == "ok"
+        assert load_seasons(loader, [yr - 2, yr - 1, yr], underway=False) == "ok"
         assert calls == [[yr - 2, yr - 1, yr], [yr - 2, yr - 1]]
 
     def test_a_failure_on_an_old_season_is_not_swallowed(self):
@@ -168,3 +168,48 @@ class TestLoadSeasons:
 
         with pytest.raises(ConnectionError):
             load_seasons(loader, [2019, 2020])
+
+    def test_a_failure_once_the_season_is_underway_is_not_swallowed(self):
+        # October: the newest season's data exists, so failing to load it is
+        # an outage -- falling back would write a file with no 2026 rows.
+        def loader(seasons):
+            raise ConnectionError("network down")
+
+        yr = date.today().year
+        with pytest.raises(ConnectionError):
+            load_seasons(loader, [yr - 1, yr], underway=True)
+
+
+class TestSeasonUnderway:
+    @pytest.fixture
+    def sched(self, tmp_path):
+        path = tmp_path / "schedules.parquet"
+        pd.DataFrame(
+            {
+                "season": [2025, 2026, 2026],
+                "gameday": ["2025-09-04", "2026-09-09", "2026-09-13"],
+                "gametime": ["20:20", "20:20", "13:00"],
+            }
+        ).to_parquet(path, index=False)
+        return path
+
+    @pytest.mark.parametrize(
+        "now, underway",
+        [
+            ("2026-07-01T12:00Z", False),  # offseason: nothing published yet
+            ("2026-09-12T12:00Z", False),  # opening week: files still arriving
+            ("2026-09-20T12:00Z", True),  # a week after the opener
+            ("2026-10-04T12:00Z", True),
+        ],
+    )
+    def test_a_week_after_the_opener(self, sched, now, underway):
+        from src.ingest.seasons import season_underway
+
+        assert season_underway(2026, pd.Timestamp(now), sched) is underway
+
+    def test_no_schedule_or_no_games_means_not_underway(self, sched, tmp_path):
+        from src.ingest.seasons import season_underway
+
+        now = pd.Timestamp("2027-10-01T00:00Z")
+        assert season_underway(2027, now, sched) is False
+        assert season_underway(2026, now, tmp_path / "missing.parquet") is False

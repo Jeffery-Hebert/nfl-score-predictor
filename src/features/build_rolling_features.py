@@ -47,10 +47,15 @@ def add_pregame_rolling_features(
 
     for col in STAT_COLS:
         masked_series = group[col].where(~finale_mask)  # finale-week values become NaN
+        # ignore_na=False: a game N days old weighs 0.5 ** (N / halflife)
+        # whatever sits between -- masked finales and unplayed rows included.
+        # It was True until 2026-10-04, which skips the decay across every
+        # NaN row, so the documented calendar half-life was not what was
+        # computed (88% of rows differed, by 0.03 points on average).
         ewm = masked_series.ewm(
             halflife=pd.Timedelta(days=halflife_days),
             times=group["gameday"],
-            ignore_na=True,
+            ignore_na=False,
         ).mean()
         group[f"pregame_{col}"] = ewm.shift(1)
     # C1: rest_days now arrives from schedules (nflverse home_rest/away_rest)

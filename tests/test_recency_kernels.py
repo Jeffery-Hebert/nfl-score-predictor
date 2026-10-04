@@ -52,9 +52,8 @@ class TestReproducesProduction:
         if include is not None:
             s = s.where(pd.Series(include))
         # ignore_na=False is the clean definition: a weighted mean of the
-        # observed values by real elapsed time. Production passes True, which is
-        # a different normalisation -- see test_documents_the_production_masking
-        # convention below, and the module docstring.
+        # observed values by real elapsed time. Production has used it since
+        # 2026-10-04 (it passed True before -- see the test below).
         ewm = s.ewm(
             halflife=pd.Timedelta(days=halflife_days), times=times, ignore_na=False
         ).mean()
@@ -114,14 +113,11 @@ class TestReproducesProduction:
         np.testing.assert_allclose(mine[both], theirs[both], rtol=1e-9, atol=1e-9)
 
     def test_documents_the_production_masking_convention(self):
-        """Production passes ignore_na=True, which is NOT a weighted mean of the
-        observed values -- it renormalises differently around NaN rows.
-
-        Pinned rather than matched. On real data the gap is ~0.012 against a
-        team_score sd of 9.9, which is why the experiments use production's own
-        function as their control arm instead of this one. If this test ever
-        starts passing, pandas changed its semantics and the control-arm
-        reasoning needs revisiting.
+        """ignore_na=True, which production passed until 2026-10-04, is NOT a
+        weighted mean of the observed values -- it skips the decay across NaN
+        rows. Pinned so the difference stays visible: experiments measured
+        before that date used production's own function, i.e. the True form,
+        as their control arm.
         """
         vals = np.array([10.0, 20.0, 30.0, 40.0, 50.0])
         times = weekly(5)

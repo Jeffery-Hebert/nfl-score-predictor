@@ -55,7 +55,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from src.predict.injury_readiness import is_provisional
+from src.predict.injury_readiness import forecast_was_provisional
 from src.provenance import sha256
 
 PRED_DIR = Path("data/predictions")
@@ -283,8 +283,13 @@ def week_payload(path: Path, actuals: pd.DataFrame, kickoffs: pd.Series) -> dict
         )
         # Forecast before the game's FINAL injury report was in the data (only
         # possible with --allow-unsettled-injuries). Weeks written before the
-        # column existed carry no flag rather than a guessed one.
-        g["provisional"] = is_provisional(r.get("injury_report_final"))
+        # column existed are judged from the record's own times: generated
+        # before the report was due means it cannot have used it. Not a guess,
+        # and not the schedule -- the verifier reaches the same answer from the
+        # record alone.
+        g["provisional"] = forecast_was_provisional(
+            r.get("injury_report_final"), r.get("generated_at"), r.get("kickoff")
+        )
         if pd.notna(r.get("act_home")):
             g["actual"] = {"away": float(r["act_away"]), "home": float(r["act_home"])}
             g["grade"] = grade(models, g["actual"])
@@ -528,7 +533,9 @@ def verify(path=None, pred_dir=PRED_DIR) -> list[str]:
                         f"{label}: market is {g.get('market')} on the page, "
                         f"{stored_market} on file"
                     )
-            want = is_provisional(r.get("injury_report_final"))
+            want = forecast_was_provisional(
+                r.get("injury_report_final"), r.get("generated_at"), r.get("kickoff")
+            )
             if g["provisional"] != want:
                 problems.append(
                     f"{label}: page says "

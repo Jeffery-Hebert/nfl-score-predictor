@@ -16,7 +16,7 @@ Read this fully before proposing any new feature or architectural change. It exi
 ## Current Architecture (As of Last Session)
 
 - **Repo:** `nfl-score-predictor`, Python + pandas/sklearn, walk-forward evaluation harness at `src/validate/walk_forward.py` (now with per-fold progress logging and elapsed-time reporting — added after a session where a Gaussian Process run's duration was hard to judge without it).
-- **Production model stack:** `src/models/linear.py`, `poisson_glm.py`, `gaussian_process.py`, feeding `stacking.py` (a Ridge meta-model). `BASE_MODELS = ["linear", "poisson", "gp"]` in `stacking.py` — this was already reduced from 13 original candidate models before the sessions covered here; the operator confirmed this reduction was intentional and evidence-based, though the original comparison evidence itself was not directly reviewed in these sessions.
+- **Production model stack:** `src/models/linear.py`, `poisson_glm.py`, `gaussian_process.py`, published as the equal-weight composite (`src/models/composite.py`, `config.yaml` `live.composite`) that `predict_week` computes from their unrounded forecasts. `stacking.py` (a Ridge meta-model on the same three, `BASE_MODELS = ["linear", "poisson", "gp"]`) is research only and never forecasts live -- it needs out-of-fold rows an unplayed game cannot have, and it does not beat its best member (A5). [Corrected 2026-10-04: this line said the three models "feed stacking.py", which has not been true since the composite went live.] The base set was reduced from 13 candidates before the sessions covered here; the operator confirmed this was intentional and evidence-based, though the original comparison evidence was not directly reviewed.
 - **Unused-but-retained models** (in `src/models/unused/`): `random_forest.py`, `xgboost_model.py`, `catboost_model.py`, `lightgbm_model.py`, `logistic.py`, `mlp.py`, `bayesian_hierarchical.py`, `rnn_lstm.py`, `monte_carlo.py`.
 - **Feature set (`src/models/common.py` FEATURE_COLS):** 24 columns — home/away pregame team-level rolling scoring, success rate, rest days, prior games played (12 -- blended off/def EPA per play was REMOVED 2026-09-17, superseded by the split); `injury_impact` per side (2); volume-weighted shrunk pass/rush EPA splits, offence and defence, per side (8); `is_neutral_site`/`is_playoff` (2). (This line read "16 columns" until 2026-09-17; it had not been updated when injuries and the split shipped.) Built via `src/features/build_rolling_features.py` (EWM, halflife = 17 weeks / 119 days, leakage-safe via `shift(1)`) → `build_game_features.py` → `model_table.parquet`.
 - **Finale-week masking:** `is_finale_week()` (week 17 for 2019–2020, week 18 for 2021+) masks finale-week stats from contributing to future EWM averages, preventing rested-starters blowouts from contaminating next season's early-week features. Confirmed via schema check (`game_type` column cleanly separates REG/WC/DIV/CON/SB) and a synthetic leakage test. **Measured effect: no statistically significant change to accuracy** (kept anyway — theoretically sound, zero cost, harmless). Applied in *both* `build_rolling_features.py` and `build_drive_rolling_features.py`. **Correction (2026-09-14):** an earlier revision of this file called the drive-level version an "incomplete fix" because the `.where()` step looked absent. A previous pass through this document then over-corrected, claiming commit `2dc3f67` had resolved it. Both were wrong. `2dc3f67` did add `.where(~finale_mask)`, but the same commit made `add_pregame_rolling_drive_features` read `season`/`week`, which `main()` never merged in from schedules (`drive_stats.parquet` carries neither). The stage therefore **crashed with `KeyError: 'season'` on every run from `2dc3f67` onward**, and `team_drive_rolling_features.parquet` on disk was left stale from before that commit. Nothing detected it: there was no leakage test for the drive path, and its only consumer (Monte Carlo) was not being run. Found by `src/features/build_all.py` on first execution. Fixed by adding `season`/`week` to the schedules merge, and covered now by `tests/test_drive_rolling_leakage.py` (4 tests, mutation-verified). Lesson: a code-reading pass confirmed the fix was present but could not confirm the stage could *execute* — running it was what found the bug.
@@ -437,8 +437,9 @@ against +0.31 overall, and weeks 1-3 RMSE is 9.4876 against 9.3640 for weeks 4+.
    weeks 1-3 only, applied when predicting an early-season game. Noise on RMSE
    (+0.0028 all games, +0.0148 on weeks 1-3, both CIs spanning zero) and it
    made the weeks 1-3 total bias **worse**, +1.141 -> +1.387. Mechanism of
-   failure: historical early-season games are dominated by 2019-2021, the
-   empty-stadium era with high away scoring and no home-field edge, so the
+   failure: historical early-season games are dominated by 2019-2021, an era
+   of high away scoring and almost no home-field edge in 2019-2020 (only 2020
+   was played in empty stadiums; 2019 just had a small home edge), so the
    offset is estimated from exactly the wrong football. The thin sample was
    flagged as a risk before running (~336 games, SE ~0.5 against a ~1.0
    effect); it turned out worse than thin, it was biased.
@@ -1158,3 +1159,57 @@ Tests: `tests/test_team_game_stats_snaps.py` (16, synthetic; the old filter
 fails 13, the nflfastR filter 5) and four data gates in
 `tests/test_team_game_stats.py` that check the built table against
 play-by-play, including offence == the opponent's defence on every game.
+
+## Audit fixes (2026-10-04)
+
+DEFECTS, not feature ideas -- shipped under the standing rule, measured after.
+Found by the line-by-line audit of 2026-10-02/04.
+
+- **EWM decay** (`build_rolling_features`, `build_drive_rolling_features`,
+  `build_qb_rolling_features`): `ignore_na=True` with `times=` skips the decay
+  step across NaN rows (masked finales, unplayed and cancelled games), so the
+  documented 17-week calendar half-life was not what was computed. Now
+  `ignore_na=False`. Pinned by
+  `tests/test_finale_week_masking.py::test_decay_runs_on_the_calendar_through_a_masked_week`
+  (fails on the old setting). The 2026-09-18 half-life sweeps and kernel
+  experiments used production's own function as control, i.e. the True form;
+  their RANKINGS are unlikely to move (the effect is ~0.03 pts) but they were
+  measured on the old decay.
+- **Unmeasurable injury impact is missing, not 0** (`unmeasurable()`, ported
+  from branch `history-2016`): 53 of 4,018 played team-games -- 20 with no
+  pre-game report in the data (14 are 2023 DIV/CON/SB), 32 in 2019 week 1 (no
+  earlier snap counts), KC 2020 week 6 (every row after kickoff).
+- **Duplicate player-weeks** (2 in 2024 week 15) collapsed to the latest report
+  (`latest_report_per_player`).
+- Doc-only: `attach_prior_share` is a career-to-date mean, not the last game; the
+  14 POSITION_VALUE codes nflverse never uses were removed (output identical on
+  all 41,256 rows; 3-4 edge rushers are "LB").
+- **Ledger, 2026 week 2**: records written before `injury_report_final` existed
+  are judged from their own generated_at vs `final_report_due(kickoff)`
+  (`injury_readiness.forecast_was_provisional`); 15 of 16 are now tagged.
+- **`load_seasons`** no longer falls back past a failure on the newest season
+  once that season has been underway 7 days (`season_underway`).
+- **`betting.py`** ATS interval now resamples weeks (it resampled games).
+- Doc corrections: README 5/5b/7/8, tests.yml, the "production feeds stacking"
+  line above, common.py's "empty-stadium" 2019.
+
+Measured: control = master b309e6e, fixed = the fix branch, same raw pull,
+1,473 games, week-block bootstrap, pooled RMSE delta (positive = worse):
+
+| model | delta | 95% CI | P(better) |
+|---|---|---|---|
+| baseline | +0.0012 | [-0.0002, +0.0027] | 5% |
+| Ridge | +0.0018 | [-0.0003, +0.0041] | 5% |
+| Poisson | +0.0018 | [-0.0003, +0.0041] | 5% |
+| GP | +0.0011 | [-0.0014, +0.0038] | 21% |
+| composite | +0.0016 | [-0.0004, +0.0038] | 7% |
+
+Margin, total, bias and calibration slope moved by under 0.01. Not attributed
+per fix in this run; on 2026-10-02 the decay fix alone measured +0.0003 Ridge /
++0.0004 Poisson and the injury fix alone +0.0016 / +0.0014.
+
+Left open, deliberately: the GP's drift offset is ~0 (in-sample residuals of a
+flexible fit) while Ridge/Poisson add ~0.35 to away scores -- possibly a modeling
+choice, raised with the operator rather than changed; and the scheduled runs'
+lateness (2.2-6.6 h) is an operations decision.
+

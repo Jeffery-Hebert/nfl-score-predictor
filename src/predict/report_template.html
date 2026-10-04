@@ -248,7 +248,9 @@ td.final{font-weight:600}
     sixteen, where one blowout would swamp the other fifteen results.</p>
     <p><b>Pre-injury-report</b> marks a forecast written before that game's final injury
     report (Wednesday for Thursday games, Friday for Sunday, Saturday for Monday) was in
-    the data. The model's injury signal was mostly missing, so treat it as provisional.</p>
+    the data. The model's injury signal was mostly missing, so treat it as provisional.
+    Weeks recorded before forecasts stored this flag (2026 weeks 1&ndash;2) are judged by
+    when each forecast was made against when its final report was due.</p>
     <p>Regenerate after new results land: <code>python -m src.predict.build_report</code></p>
   </div>
 </div>

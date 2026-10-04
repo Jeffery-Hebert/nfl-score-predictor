@@ -429,9 +429,40 @@ class TestModelsComeFromTheRecords:
         assert w["n_provisional"] == 1
 
     def test_a_week_written_before_the_flag_existed_is_not_smeared(self, tmp_path):
+        # generated Sunday morning, after Friday's final report was due
         w = week_payload(
             self._week(tmp_path), pd.DataFrame(columns=["game_id"]), NO_KICKOFFS
         )
+        assert w["games"][0]["provisional"] is False
+
+    def test_an_unflagged_forecast_made_before_its_report_was_due_is_flagged(
+        self, tmp_path
+    ):
+        # 2026 week 2: forecast Thursday for a Sunday game, before the column
+        # existed. Friday's report was due 20:00 UTC on the 25th.
+        path = self._week(tmp_path, {"generated_at": "2026-09-24T19:00:00+00:00"})
+        w = week_payload(path, pd.DataFrame(columns=["game_id"]), NO_KICKOFFS)
+        assert w["games"][0]["provisional"] is True
+        assert w["n_provisional"] == 1
+
+    def test_the_stored_flag_wins_over_the_inference(self, tmp_path):
+        # --allow-unsettled-injuries can be run AFTER the due time while
+        # nflverse still lacks the report: the record says provisional.
+        path = self._week(tmp_path, {"injury_report_final": False})
+        w = week_payload(path, pd.DataFrame(columns=["game_id"]), NO_KICKOFFS)
+        assert w["games"][0]["provisional"] is True
+        path = self._week(
+            tmp_path,
+            {"injury_report_final": True, "generated_at": "2026-09-24T19:00:00+00:00"},
+        )
+        w = week_payload(path, pd.DataFrame(columns=["game_id"]), NO_KICKOFFS)
+        assert w["games"][0]["provisional"] is False
+
+    def test_no_stored_kickoff_means_no_inference(self, tmp_path):
+        path = self._week(
+            tmp_path, {"kickoff": None, "generated_at": "2026-09-01T00:00:00+00:00"}
+        )
+        w = week_payload(path, pd.DataFrame(columns=["game_id"]), NO_KICKOFFS)
         assert w["games"][0]["provisional"] is False
 
 

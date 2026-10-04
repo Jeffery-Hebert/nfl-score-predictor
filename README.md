@@ -24,15 +24,15 @@ just "who wins."
 The headline number is **RMSE** (root mean squared error). Think of it as
 "typically how many points off are we, with big misses punished extra."
 
-Current accuracy, measured across 1,456 real games from 2021 through 2026 Week 2
-(re-benchmarked 2026-09-24):
+Current accuracy, measured across 1,473 real games from 2021 through 2026 Week 4's
+Thursday game (re-benchmarked 2026-10-04):
 
 | What | Typical error per team's score |
 |---|---|
-| Always guess the league average | 9.96 points |
-| Simple rule, no machine learning | 9.48 points |
-| **Our best model (the composite: Poisson + GP + Ridge, averaged)** | **9.38 points** |
-| Las Vegas closing line | 9.13 points |
+| Always guess the league average | 9.95 points |
+| Simple rule, no machine learning | 9.47 points |
+| **Our best model (the composite: Poisson + GP + Ridge, averaged)** | **9.36 points** |
+| Las Vegas closing line | 9.12 points |
 
 Two honest takeaways:
 
@@ -150,7 +150,7 @@ Data flows one direction, in stages. Nothing loops back.
  STEP 1: DOWNLOAD           free public NFL data
  ─────────────────────────────────────────────────────────────
    schedules   →  who played whom, when, final scores
-   play-by-play →  every play of every game since 2019 (~343k rows)
+   play-by-play →  every play of every game since 2019 (~350k rows)
    injuries    →  the official weekly injury report
    snap counts →  what share of plays each player was on the field for
 
@@ -266,13 +266,16 @@ Claude. The data is public, and the workflow's own token makes the commit.
 |---|---|
 | Every day, 21:37 | Shortly after that day's 4pm ET final injury report (90 minutes after in daylight time, 37 in winter), forecasts the slate it covers: Wednesday → the Thursday game, Thursday → Saturday games, Friday → the Sunday slate, Saturday → Monday night |
 | Every day, 13:37 | Refreshes those forecasts on the overnight data. Monday's run refits the Monday night game on Sunday's results. |
-| Sunday, 11:37 | Re-forecasts the Sunday and Monday games on the latest data, before the 9:30am ET London kickoffs |
+| Sunday, 11:37 | Re-forecasts the Sunday and Monday games on the latest data. Meant to run before the 9:30am ET London kickoffs, but GitHub starts it hours late (below), so London games are covered by Saturday's runs |
 | Tuesday, 13:37 | Also grades the week and re-runs **every** model's walk-forward backtest plus the model report |
 
 A game is never forecast before its final injury report (below), or within 15
 minutes of its kickoff, so every forecast is committed before its game starts.
-Two runs a day is deliberate: GitHub can start a scheduled run hours late (4½ on
-2026-09-25) or skip it, and every game still gets several chances. A run that
+Two runs a day is deliberate: GitHub starts scheduled runs late -- every one of
+the first 19 (2026-09-25 to 10-03) began 2.2 to 6.6 hours after its cron time,
+3.6 hours typically -- and can skip them, so every game needs several chances.
+A Thursday night game is the tight one: its final report comes Wednesday
+afternoon, and nflverse has published it more than a day late. A run that
 finds nothing ready, or reproduces forecasts already on file, commits nothing.
 Between seasons each run stops after one schedule check.
 
@@ -472,14 +475,17 @@ pre-kickoff forecast doesn't have:
 Neither is leakage in the strict sense, and both are enough to make a late
 forecast flatter than a live one.
 
-The label is per **game**, not per week, because a week is now predicted three
-times as its slates come up — Thursday afternoon for Thursday night, Sunday
-morning for the Sunday games, Monday afternoon for Monday night. Each game is
-forecast about six hours before its own kickoff, on the freshest injury report
-available, and is then frozen: a later run in the same week carries it over
-untouched rather than rewriting it. So a week is routinely part pre-registered
-and part not, and saying which games were late beats condemning the whole
-slate.
+The label is per **game**, not per week, because a week is written several
+times as its slates come up: each game is first forecast by the first run after
+its own final injury report is in the data (usually the day before it, for a
+Sunday game), and every later run until 15 minutes before its kickoff forecasts
+it again. A re-forecast that comes out identical leaves the stored row, and its
+original time, alone; one that moved -- Monday night's game refitted on
+Sunday's results, say -- replaces it. Once a game kicks off its forecast is
+frozen for good. So a week is routinely part pre-registered and part not, and
+saying which games were late beats condemning the whole slate. (Until
+2026-10-04 this paragraph said each game was forecast about six hours before
+kickoff and then frozen; neither was how the code works.)
 
 **The page always matches the records.** `data/predictions/index.html` is
 tracked in git next to the records and committed with them by the pipeline, so
@@ -603,7 +609,7 @@ quietly drift from it.
 
 ## 7. What we've actually learned
 
-These are measured results, not opinions. All use the same 1,426-game test set.
+These are measured results, not opinions. Each was measured on the walk-forward test set of its day: every game from 2021 on that had been played by then (1,426 to 1,472 games).
 
 ### The model was drowning in features, not starving for them
 
@@ -665,6 +671,39 @@ wrong thing, so under section 1's rule it would have been fixed even if every
 model had got worse. The table is here so you can see what the fix changed. The
 experiment chose *which* correct definition to use; it never decided *whether*
 to fix it.
+
+### Five more fixes (October 4, 2026) -- each made accuracy a hair worse
+
+A line-by-line audit found logic that did not do what its name or its
+documentation said. All of it was fixed for that reason alone (section 1):
+
+1. **Recent form decayed on the wrong clock.** The "half-life of 17 weeks" was
+   computed with a pandas setting that skips the decay across masked rows (the
+   rested-starters finale, unplayed games), so an older game kept more weight
+   than its age allows. 88% of rows moved, by 0.03 points on average.
+2. **Missing injury data counted as a healthy team.** 53 played team-games
+   have no injury report in the data, or no earlier snap counts to say who
+   matters (2019's opening week, most of the 2023 playoffs). They were scored as
+   "nobody of note was out"; they are now marked unknown, and the models fill in
+   the average.
+3. **Two players were counted twice** in one 2024 week (listed Questionable,
+   then Out); the game-day report now stands alone.
+4. **The ledger showed week 2 as if it used the final injury report.** Fifteen
+   of its sixteen forecasts were made a day or more before that report was due.
+   They are now tagged *pre-injury-report*.
+5. **A network error could silently drop this season's data.** The download
+   step treated any failure on the newest season as "not published yet", even
+   in October. It now stops the run once the season has been underway a week.
+
+Fixes 1-3 change model inputs. Measured together on the same 1,473 games, change
+in typical error per team score (positive is worse):
+
+| Ridge | Poisson | GP | Combined (published) |
+|---|---|---|---|
+| +0.002 | +0.002 | +0.001 | **+0.002** (95% interval −0.000 to +0.004) |
+
+Inside the noise, slightly worse on every model, and shipped anyway: the old
+numbers measured something other than what they said.
 
 ### Ideas that were tested and rejected
 
@@ -748,9 +787,10 @@ locally after a build.
    teams, no duplicate plays, scores non-negative.)
 2. **Leakage gates** — hand-built examples with known answers, proving no
    future information reaches the model.
-3. **Freshness gates** — every built file must be newer than the files it was
-   built from. This caught a real bug where results were being compared against
-   a stale table for two days.
+3. **Freshness gates** — every built file must have been built from the inputs
+   as they are now, checked by content fingerprint (an earlier version compared
+   file times, and cried wolf on every re-save). This caught a real bug where
+   results were being compared against a stale table for two days.
 4. **Completeness gates** — the mirror image of leakage: does the model see
    everything it *should*? A model that is leakage-free but silently missing
    last week's games runs cleanly and is useless. This layer also covers the
@@ -762,8 +802,10 @@ locally after a build.
    even if it scores worse (section 1), and its result is recorded either way.
 
 > **What's a bootstrap test?** If a change improves error from 9.40 to 9.38, is
-> that real or luck? We re-draw the 1,426 games at random (with repeats) 5,000
-> times and re-measure. If the improvement holds up across nearly all 5,000
+> that real or luck? We re-draw the test set's *weeks* at random (with repeats)
+> 5,000 times and re-measure -- whole weeks, because games in the same week share
+> one fitted model and one scoring environment, so they are not independent
+> draws. If the improvement holds up across nearly all 5,000
 > redraws, it's real. If it flips sign depending on which games we drew, it was
 > noise. Most promising-looking improvements in this project turned out to be
 > noise, which is precisely why the test exists.
@@ -777,48 +819,53 @@ evaluation, 16 benchmarked models plus a composite, a live forecast step that
 waits for each game's final injury report, a one-command weekly run, and a
 ledger page that grades every forecast once the results land.
 
-**Current benchmark** (re-run 2026-09-24 on every model, 1,456 games from 2021
-through 2026 Week 2; RMSE per team's score, pooled home and away;
-`python -m src.validate.model_report`):
+**Current benchmark** (live models and baseline re-run 2026-10-04 on 1,473 games
+from 2021 through 2026 Week 4's Thursday game, after the fixes of that day --
+section 7; every other model last re-run 2026-10-02 on 1,472 games, before
+them. RMSE per team's score, pooled home and away):
 
 | Rank | Model | RMSE | Beats the no-ML baseline?* |
 |---|---|---|---|
-| 1 | **Composite** (Poisson + GP + Ridge, equal weights) — live | **9.378** | yes |
-| 2 | Poisson GLM — live | 9.380 | yes |
-| 3 | Gaussian Process — live | 9.387 | yes |
-| 4 | Ridge regression — live | 9.391 | yes |
-| 5 | Bayesian hierarchical | 9.420 | no (noise) |
-| 6 | CatBoost | 9.447 | no |
-| 7 | XGBoost | 9.460 | no |
-| 8 | Random forest | 9.464 | no |
-| 9 | Rule-based baseline | 9.476 | — |
-| 10–16 | Drive model v2, drive chain, LightGBM, logistic, RNN, Monte Carlo v1, MLP | 9.48–9.95 | no; Monte Carlo and MLP are significantly worse |
+| 1 | **Composite** (Poisson + GP + Ridge, equal weights) — live | **9.363** | yes |
+| 2 | Poisson GLM — live | 9.366 | yes |
+| 3 | Gaussian Process — live | 9.369 | yes |
+| 4 | Ridge regression — live | 9.374 | yes |
+| 5 | Bayesian hierarchical | 9.410 | no (noise) |
+| 6 | CatBoost | 9.426 | no |
+| 7 | Random forest | 9.441 | no |
+| 8 | XGBoost | 9.443 | no |
+| 9 | LightGBM | 9.457 | no |
+| 10 | Rule-based baseline | 9.469 | — |
+| 11–16 | Drive model v2, drive chain, logistic, RNN, Monte Carlo v1, MLP | 9.48–9.90 | no; Monte Carlo and MLP are significantly worse |
 
 \*Paired bootstrap that resamples whole weeks. Games in one week share a model
 and a scoring environment, so resampling single games gives intervals that are
-too narrow. The ridge stack is scored on 2022 onward only: on the 1,171 games
-every model shares it ties Ridge (9.298), behind the composite (9.285).
+too narrow. The ridge stack is scored on 2022 onward only (1,187 games, 9.282 on
+its own games) and is not ranked against models scored on more.
 
-What the deeper report says (all in `data/processed/reports/model_report.html`):
+What the deeper report says (2026-10-02 run, all in
+`data/processed/reports/model_report.html`):
 
-- **The live models are near-duplicates.** Their errors correlate at 0.996–0.999,
-  which is why averaging them gains only about 0.002 points. Adding the most
-  different models (the drive models, the Bayesian model) moves the composite by
-  under 0.01, inside the noise. Fitted weights do no better than equal ones.
-- **Totals lean high, and most in prime time.** The typical game is
-  over-predicted: the median total error is +1.5 points and 55% of games finish
-  under the model's total. Rare blowouts pull the *mean* back to about +0.4.
-  Prime-time totals are over-predicted by about 1.5 points (Monday night 2.3,
-  Sunday night 1.7), against about 0.1 in daytime games. No model knows when a
-  game kicks off.
-- **Three teams are mis-rated by every model**, beyond the noise: Buffalo is
-  under-rated (margin about 3 points too low), while Atlanta and Tennessee are
-  over-rated (about 2.9).
-- **The market is still ahead:** closing-line margin error 12.68 against the
-  composite's 13.06.
+- **The live models are near-duplicates.** Their errors correlate at 0.997–0.9996,
+  which is why averaging them gains only a few thousandths of a point. Fitted
+  weights do no better than equal ones.
+- **The closing line already contains everything the model knows.** Regress the
+  real margin on the closing spread AND the model's margin and the model's weight
+  is 0.14, 95% interval −0.09 to +0.38 -- indistinguishable from zero (totals:
+  −0.15, −0.46 to +0.15). Blending the model into the line does not reduce error.
+- **Totals lean high, and most in prime time.** The median total error is +1.3
+  points and 54% of games finish under the model's total; rare blowouts pull the
+  *mean* back to about +0.2. Prime-time totals are over-predicted by more (Monday
+  night +2.3, Sunday night +1.4). The model's total is an average, and scores are
+  skewed, so against a betting total (which sits near the median) its total pick
+  is the Over 60% of the time while only 48% of games go over.
+- **Two teams are mis-rated by every model**, beyond the noise: Buffalo is
+  under-rated (margin about 2.9 points too low) and Tennessee over-rated (2.7).
+- **The market is still ahead:** closing-line margin error 12.67 against the
+  composite's 13.02.
 
 **Is it ready to bet with? No.** Beating the market requires about 52.4% against
-the spread to cover the vig. The composite is at 50.9% (95% interval 48.4–53.6%),
+the spread to cover the vig. The composite is at 50.6% (95% interval 48.2–53.1%),
 which is a coin flip. It predicts *scores* respectably and it does not predict
 *market inefficiency* at all. Those are different jobs, and only the first one is
 going well.

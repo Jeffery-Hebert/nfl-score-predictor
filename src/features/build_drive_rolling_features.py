@@ -55,10 +55,15 @@ def add_pregame_rolling_drive_features(
 
     for col in DRIVE_STAT_COLS:
         masked_series = group[col].where(~finale_mask)
+        # ignore_na=False: a game N days old weighs 0.5 ** (N / halflife)
+        # whatever sits between -- masked finales and unplayed rows included.
+        # It was True until 2026-10-04, which skips the decay across every
+        # NaN row, so the documented calendar half-life was not what was
+        # computed (88% of rows differed, by 0.03 points on average).
         ewm = masked_series.ewm(
             halflife=pd.Timedelta(days=halflife_days),
             times=group["gameday"],
-            ignore_na=True,
+            ignore_na=False,
         ).mean()
         group[f"pregame_{col}"] = ewm.shift(1)
     return group
@@ -73,10 +78,10 @@ def upcoming_team_games(played: pd.DataFrame) -> pd.DataFrame:
     game at all. build_team_game_stats avoids this by starting from the
     schedule; this does the same for the drive features.
 
-    Only games AFTER the last played game are added. A NaN row in the MIDDLE of
-    a team's history (the cancelled 2022 BUF@CIN game) would change how pandas'
-    ignore_na EWM decays the next observation, altering historical features;
-    appending strictly after the history cannot touch any row before it.
+    Only games AFTER the last played game are added, so appending them cannot
+    touch any row before it. (Since 2026-10-04 the EWM decays by calendar time
+    across NaN rows, so a NaN row in the middle would no longer shift later
+    values either; appending only at the end is kept as the simpler guarantee.)
     Stats are NaN, so these rows receive a pregame value and contribute nothing.
     """
     sched = pd.read_parquet("data/raw/schedules.parquet")

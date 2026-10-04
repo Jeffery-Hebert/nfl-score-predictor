@@ -63,10 +63,15 @@ def add_pregame_qb_features(group: pd.DataFrame, halflife_days: float) -> pd.Dat
 
     for col in QB_STAT_COLS:
         masked_series = group[col].where(~finale_mask)
+        # ignore_na=False: a game N days old weighs 0.5 ** (N / halflife)
+        # whatever sits between -- masked finales and unplayed rows included.
+        # It was True until 2026-10-04, which skips the decay across every
+        # NaN row, so the documented calendar half-life was not what was
+        # computed (88% of rows differed, by 0.03 points on average).
         ewm = masked_series.ewm(
             halflife=pd.Timedelta(days=halflife_days),
             times=group["gameday"],
-            ignore_na=True,
+            ignore_na=False,
         ).mean()
         group[f"pregame_{col}"] = ewm.shift(1)
     group["prior_qb_games_started"] = range(len(group))

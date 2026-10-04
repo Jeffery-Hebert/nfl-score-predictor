@@ -67,6 +67,28 @@ def is_provisional(final) -> bool:
     return not bool(final)
 
 
+def forecast_was_provisional(final, generated_at, kickoff) -> bool:
+    """Whether a stored forecast was made before its game's final injury report.
+
+    The record's own injury_report_final answers it when present (see
+    is_provisional). Weeks written before that column existed -- 2026 weeks 1
+    and 2 -- can still be judged from the record itself: a forecast generated
+    before the final report was DUE cannot have used it. Fifteen of week 2's
+    sixteen forecasts were made 65-96 hours before kickoff, a day or more
+    before their Friday report, and the ledger showed them untagged -- which
+    reads as final. Only the record's own stored kickoff is used, never the
+    schedule, so the page and its verifier reach the same answer from the
+    record alone; a record without one stays untagged, as before.
+    """
+    if not (final is None or (not isinstance(final, str) and pd.isna(final))):
+        return is_provisional(final)
+    made = pd.to_datetime(generated_at, utc=True, errors="coerce")
+    kick = pd.to_datetime(kickoff, utc=True, errors="coerce")
+    if pd.isna(made) or pd.isna(kick):
+        return False
+    return bool(made < final_report_due(kick))
+
+
 def et(ts: pd.Timestamp) -> str:
     """'Fri Sep 25 4:00pm ET' -- portable (no platform-specific strftime flags)."""
     t = pd.Timestamp(ts).tz_convert("US/Eastern")

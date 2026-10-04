@@ -9,9 +9,10 @@
 # gitignored, so schema/table tests that read built parquet cannot run here.
 # Run those locally after building the pipeline:
 #     pytest tests/ -m requires_data -v
-# That scope includes tests/test_imports.py, which imports every module under
+# CI's scope includes tests/test_imports.py, which imports every module under
 # src/ -- the cheap net that would have caught the experiment scripts that sat
-# broken against the current feature set.
+# broken against the current feature set. (This comment placed it in the
+# requires_data scope until 2026-10-04; it needs no data and runs here.)
 #
 # torch is deliberately not installed here -- no test imports it, and the
 # CPU-wheel index URL breaks the install (see the note in requirements.txt).

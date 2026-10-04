@@ -118,17 +118,25 @@ def straight_up(m: pd.DataFrame) -> dict:
     return {"n": n, "wins": wins, "rate": wins / n if n else float("nan")}
 
 
-def boot_rate_ci(picked, landed, push):
+def boot_rate_ci(picked, landed, push, blocks):
     """Bootstrap CI on the win rate, so 52% over 1,400 games can be told apart
-    from 52% over 40."""
+    from 52% over 40.
+
+    Resamples whole WEEKS (blocks = season * 100 + week): games in one week share
+    a fitted model and a scoring environment, so they are not independent draws.
+    This resampled single games until 2026-10-04, against the project's own rule
+    (src/validate/model_report.BlockBootstrap), which made the interval too
+    narrow.
+    """
+    from src.validate.model_report import BlockBootstrap
+
     live = ~push
-    hit = (picked[live] == landed[live]).to_numpy()
+    hit = (picked[live] == landed[live]).to_numpy(float)
     if not len(hit):
         return float("nan"), float("nan")
-    rng = np.random.default_rng(SEED)
-    draws = rng.integers(0, len(hit), (N_BOOT, len(hit)))
-    rates = hit[draws].mean(axis=1)
-    return float(np.percentile(rates, 2.5)), float(np.percentile(rates, 97.5))
+    return BlockBootstrap(np.asarray(blocks)[live.to_numpy()], N_BOOT, SEED).mean_ci(
+        hit
+    )
 
 
 def edge_curve(m: pd.DataFrame) -> list[dict]:
@@ -178,6 +186,7 @@ def report(name: str, m: pd.DataFrame, min_edge: float) -> dict:
         m["pred_margin"] > m["spread_line"],
         m["true_margin"] > m["spread_line"],
         m["true_margin"] == m["spread_line"],
+        (m["season"] * 100 + m["week"]).to_numpy(),
     )
     mc = market_comparison(m)
     return {
