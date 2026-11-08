@@ -41,6 +41,8 @@ from pathlib import Path
 
 import pandas as pd
 
+from src.schedule import EASTERN
+
 INJURIES = Path("data/raw/injuries.parquet")
 FINAL_REPORT_HOUR_ET = 16
 # Share of the slate's teams that must show statuses before the report counts as
@@ -91,13 +93,13 @@ def forecast_was_provisional(final, generated_at, kickoff) -> bool:
 
 def et(ts: pd.Timestamp) -> str:
     """'Fri Sep 25 4:00pm ET' -- portable (no platform-specific strftime flags)."""
-    t = pd.Timestamp(ts).tz_convert("US/Eastern")
+    t = pd.Timestamp(ts).tz_convert(EASTERN)
     return f"{t:%a %b %d} {t.hour % 12 or 12}:{t:%M}{'am' if t.hour < 12 else 'pm'} ET"
 
 
 def final_report_due(kickoff_utc: pd.Timestamp) -> pd.Timestamp:
     """When the final injury report for a game is published (UTC)."""
-    local = pd.Timestamp(kickoff_utc).tz_convert("US/Eastern")
+    local = pd.Timestamp(kickoff_utc).tz_convert(EASTERN)
     lead_days = 1 if local.dayofweek == 3 else 2  # Thursday games: day before
     report_day = (local - pd.Timedelta(days=lead_days)).normalize()
     return (report_day + pd.Timedelta(hours=FINAL_REPORT_HOUR_ET)).tz_convert("UTC")

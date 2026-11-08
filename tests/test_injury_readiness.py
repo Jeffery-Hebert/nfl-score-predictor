@@ -15,8 +15,7 @@ import pandas as pd
 import pytest
 
 from src.predict import injury_readiness as ir
-
-ET = "US/Eastern"
+from src.schedule import EASTERN as ET
 
 
 def utc(ts_et: str) -> pd.Timestamp:

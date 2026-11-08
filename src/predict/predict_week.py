@@ -74,7 +74,7 @@ from src.models import registry
 from src.models.common import chronological
 from src.predict import injury_readiness
 from src.provenance import git_state
-from src.schedule import kickoff_by_game
+from src.schedule import EASTERN, kickoff_by_game
 
 MODEL_TABLE = Path("data/processed/model_table.parquet")
 SCHEDULES = Path("data/raw/schedules.parquet")
@@ -120,7 +120,7 @@ def pick_week(df: pd.DataFrame, season, week, now=None):
     kickoff = pd.to_datetime(
         unplayed["game_id"].map(kickoff_utc(unplayed["game_id"])), utc=True
     )
-    today_et = now.tz_convert("US/Eastern").tz_localize(None).normalize()
+    today_et = now.tz_convert(EASTERN).tz_localize(None).normalize()
     # A game with no known kickoff counts as upcoming only from its date on.
     ahead = (kickoff > now + KICKOFF_MARGIN) | (
         kickoff.isna() & (unplayed["gameday"] >= today_et)

@@ -1,14 +1,23 @@
 """
 Kickoff instants from the nflverse schedule -- one implementation.
 
-This construction (gameday + gametime, read as US/Eastern, converted to UTC)
-used to be copied into build_injury_features.py, predict_week.py and
+This construction (gameday + gametime, read as US Eastern time, converted to
+UTC) used to be copied into build_injury_features.py, predict_week.py and
 build_report.py, with a comment in the last one calling three copies two too
 many. It lives here, in a module that imports nothing heavier than pandas, so
 the one-second report builder can use it without pulling in every model.
 """
 
 import pandas as pd
+
+# The NFL's clock, and the ONLY place the project names a time zone. Always the
+# canonical IANA name, never the legacy alias "US/Eastern": Ubuntu 26.04 (GitHub's
+# ubuntu-latest from late October 2026) moved the US/* aliases out of its tzdata
+# package, and every scheduled run from 2026-10-30 to 2026-11-08 died on that
+# lookup before forecasting anything. requirements.txt also pins the tzdata
+# package, so Python resolves this from its own copy whatever the OS ships.
+# tests/test_timezones.py holds both rules.
+EASTERN = "America/New_York"
 
 DEFAULT_KICKOFF_ET = "13:00"  # a missing gametime is treated as a 1pm Sunday slot
 
@@ -26,9 +35,9 @@ def kickoff_utc(schedules: pd.DataFrame) -> pd.Series:
         + schedules["gametime"].fillna(DEFAULT_KICKOFF_ET),
         errors="coerce",
     )
-    return ts.dt.tz_localize(
-        "US/Eastern", ambiguous="NaT", nonexistent="NaT"
-    ).dt.tz_convert("UTC")
+    return ts.dt.tz_localize(EASTERN, ambiguous="NaT", nonexistent="NaT").dt.tz_convert(
+        "UTC"
+    )
 
 
 def kickoff_by_game(schedules: pd.DataFrame, game_ids=None) -> pd.Series:
