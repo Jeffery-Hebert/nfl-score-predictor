@@ -134,7 +134,14 @@ jobs:
           set -o pipefail
           # The log goes OUTSIDE the checkout: an untracked file in it would mark
           # the build and every forecast's code_version "dirty".
-          python -m src.weekly $flags 2>&1 | tee "$RUNNER_TEMP/pipeline.log"
+          if ! python -m src.weekly $flags 2>&1 | tee "$RUNNER_TEMP/pipeline.log"; then
+            # Reading a run's log takes a GitHub sign-in; its annotations show on
+            # the run page to anyone. So the lines that say what broke become
+            # annotations -- for the 2026-11 outage, the ZoneInfoNotFoundError.
+            grep -E '^(STOPPED|ERROR|FAILED)|(Error|Exception): ' "$RUNNER_TEMP/pipeline.log" \
+              | tail -n 6 | sed 's/%/%25/g; s/^/::error::/' || true
+            exit 1
+          fi
 
       # Runs even if a later part of the pipeline step failed: a forecast is
       # written only after every test has passed and every model has fitted, so
@@ -147,11 +154,16 @@ jobs:
         run: |
           git add data/predictions/*.parquet
           ledger_ok=true
-          if python -m src.predict.build_report --check; then
+          check="$RUNNER_TEMP/ledger-check.txt"
+          if python -m src.predict.build_report --check > "$check" 2>&1; then
+            cat "$check"
             git add data/predictions/index.html
           else
             ledger_ok=false
+            cat "$check"
             echo "::error::the ledger page does not match the records; committing the records without it"
+            # what the check said, where it can be read without a sign-in
+            tail -n 4 "$check" | sed 's/%/%25/g; s/^/::error::ledger check: /'
           fi
           if git diff --cached --quiet; then
             echo "No forecast or grade changed. Nothing to commit."
@@ -179,8 +191,11 @@ jobs:
             >> "$RUNNER_TEMP/message.txt"
           git -c user.name="$BOT" -c user.email="$BOT_EMAIL" \
             commit -q -F "$RUNNER_TEMP/message.txt"
-          git pull -q --rebase --autostash origin "$GITHUB_REF_NAME"
-          git push -q origin "HEAD:$GITHUB_REF_NAME"
+          if ! git pull -q --rebase --autostash origin "$GITHUB_REF_NAME" \
+            || ! git push -q origin "HEAD:$GITHUB_REF_NAME"; then
+            echo "::error::the forecasts were committed here but could not be pushed to $GITHUB_REF_NAME"
+            exit 1
+          fi
           git log -1 --format="Committed %h: %s"
           [ "$ledger_ok" = true ]
 

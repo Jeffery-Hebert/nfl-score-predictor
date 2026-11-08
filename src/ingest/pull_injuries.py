@@ -36,8 +36,8 @@ if __package__ in (None, ""):  # run as a file: python src/ingest/<this>.py
 
 import nflreadpy as nfl  # noqa: E402
 
-from src.ingest.manifest import record_pull  # noqa: E402
 from src.ingest.fetch import fetch  # noqa: E402
+from src.ingest.manifest import record_pull  # noqa: E402
 from src.ingest.seasons import load_seasons  # noqa: E402
 from src.ingest.seasons import seasons as seasons_to_pull  # noqa: E402
 

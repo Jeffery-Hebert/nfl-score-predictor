@@ -290,10 +290,10 @@ Between seasons each run stops after one schedule check.
 - **Pushing a fix runs it at once:** a push to `master` that changes code,
   tests, config or requirements starts the pipeline immediately, and it commits
   whatever forecasts are ready, just as the next scheduled run would.
-- **What it runs on is pinned.** The machine image (`ubuntu-26.04`), Python and
-  every package are fixed versions, and Python carries its own time-zone
-  database (`tzdata`), so nothing changes underneath the pipeline unless a
-  commit changes it. Downloads from nflverse are retried through network
+- **What it runs on is pinned.** The machine image (`ubuntu-26.04`), the
+  Python version (3.12) and every package are fixed, and Python carries its own
+  time-zone database (`tzdata`), so nothing changes underneath the pipeline
+  unless a commit changes it. Downloads from nflverse are retried through network
   failures (`src/ingest/fetch.py`).
 - **By hand:** Actions → pipeline → *Run workflow* (options: backtest, publish,
   forecast early), or `gh workflow run pipeline.yml -f backtest=true`.

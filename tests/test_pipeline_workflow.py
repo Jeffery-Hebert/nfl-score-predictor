@@ -81,6 +81,15 @@ class TestTheWorkflow:
         assert "--status completed" in run and '!= "failure"' in run
         assert run.index('if [ -n "$open" ]') < run.index("gh issue create")
 
+    def test_a_failure_says_why_where_anyone_can_read_it(self, wf):
+        # A run's log takes a sign-in to read; its annotations do not. Through
+        # the 2026-11 outage the run page said only "exit code 1".
+        main = step_named(wf, "Pull, build, test, forecast, grade")["run"]
+        assert "(Error|Exception): " in main and "::error::" in main
+        commit = step_named(wf, "Commit changed forecasts")["run"]
+        assert "::error::ledger check: " in commit
+        assert "could not be pushed" in commit
+
     def test_runs_never_overlap(self, wf):
         assert wf["concurrency"]["cancel-in-progress"] is False
 
