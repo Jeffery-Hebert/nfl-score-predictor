@@ -40,7 +40,9 @@
 #
 # Where to look: each run's page shows the current week's forecasts (and the
 # leaderboard on Tuesdays); the ledger page, model report and logs are attached
-# as artifacts. Failures email whoever last edited this file's schedule.
+# as artifacts. Failures email whoever last edited this file's schedule, and two
+# in a row open an issue -- the failure alarm, the last step -- which the next
+# successful run closes.
 #
 # By hand: Actions -> pipeline -> Run workflow, or
 #     gh workflow run pipeline.yml -f backtest=true
@@ -80,6 +82,8 @@ on:
 
 permissions:
   contents: write # commit forecast records back
+  issues: write # raise, and clear, the failure alarm
+  actions: read # the alarm asks how the previous run ended
 
 concurrency:
   group: pipeline # one run at a time: a second waits instead of racing the push
@@ -87,7 +91,12 @@ concurrency:
 
 jobs:
   pipeline:
-    runs-on: ubuntu-latest
+    # Pinned, never ubuntu-latest: that label moved to Ubuntu 26.04 under this
+    # workflow mid-season, and every run from 2026-10-30 to 11-08 failed on it
+    # (src/schedule.py, EASTERN). The OS now changes only in a commit, which,
+    # pushed, runs this pipeline and the tests on the new image at once.
+    # tests.yml must name the same image (tests/test_pipeline_workflow.py).
+    runs-on: ubuntu-26.04
     timeout-minutes: 240
     env:
       BACKTEST: ${{ github.event.schedule == '37 13 * * 2' || inputs.backtest == true }}
@@ -232,3 +241,50 @@ jobs:
             data/processed/logs/
           if-no-files-found: ignore
           retention-days: 30
+
+      # A failure nobody notices is a forecast nobody makes. From 2026-10-30 to
+      # 11-08 nineteen runs failed in a row and most of two weeks went
+      # unforecast, with only GitHub's per-run emails to say so. So a failure
+      # that outlasts the next run opens ONE issue for the whole outage, with the
+      # end of the log in it: it notifies the owner and stays on the repository
+      # page. The next run that succeeds closes it. A lone failure (nflverse
+      # publishing late) usually clears by itself and opens nothing. Last, so
+      # job.status covers every step; it can never fail the run itself.
+      - name: Raise or clear the failure alarm
+        if: always() && github.ref_name == 'master'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STATUS: ${{ job.status }}
+          TITLE: "The pipeline is failing"
+        run: |
+          run="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          open=$(gh issue list --state open --search "in:title \"$TITLE\"" \
+            --json number --jq '.[0].number // empty')
+          if [ "$STATUS" = "success" ]; then
+            if [ -n "$open" ]; then
+              gh issue close "$open" --comment "Recovered: $run succeeded."
+            fi
+            exit 0
+          fi
+          if [ -n "$open" ]; then
+            echo "Alarm already raised: issue #$open"
+            exit 0
+          fi
+          previous=$(gh run list --workflow pipeline.yml --branch master \
+            --status completed --limit 1 --json conclusion --jq '.[0].conclusion')
+          if [ "$previous" != "failure" ]; then
+            echo "The run before this one did not fail ($previous): no alarm yet."
+            exit 0
+          fi
+          {
+            echo "This run and the one before it both failed: $run"
+            echo
+            echo "Nothing is forecast until a run succeeds; the first that does closes this issue."
+            echo "The end of this run's log:"
+            echo
+            echo '```'
+            tail -n 40 "$RUNNER_TEMP/pipeline.log" 2>/dev/null || echo "(no log was written)"
+            echo '```'
+          } > "$RUNNER_TEMP/alarm.md"
+          gh issue create --title "$TITLE" --body-file "$RUNNER_TEMP/alarm.md"

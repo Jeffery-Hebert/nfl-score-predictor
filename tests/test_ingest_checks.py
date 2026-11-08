@@ -11,10 +11,13 @@ Run: pytest tests/test_ingest_checks.py -v
 """
 
 from datetime import date
+from unittest.mock import patch
 
 import pandas as pd
 import pytest
+import requests
 
+from src.ingest.fetch import WAITS, fetch
 from src.ingest.pull_all import check
 from src.ingest.seasons import current_season, load_seasons
 
@@ -178,6 +181,83 @@ class TestLoadSeasons:
         yr = date.today().year
         with pytest.raises(ConnectionError):
             load_seasons(loader, [yr - 1, yr], underway=True)
+
+
+def nflreadpy_error(cause):
+    """What nflreadpy raises for any requests failure: the built-in
+    ConnectionError, the original chained as its cause."""
+    try:
+        raise ConnectionError(f"Failed to download: {cause}") from cause
+    except ConnectionError as err:
+        return err
+
+
+def http_error(status):
+    response = requests.Response()
+    response.status_code = status
+    return requests.exceptions.HTTPError(f"{status}", response=response)
+
+
+class TestFetch:
+    """A network hiccup must not cost a run its forecasts; a missing file must
+    still fail fast, so load_seasons can fall back a season."""
+
+    def loader(self, *failures):
+        calls = []
+
+        def load(seasons):
+            calls.append(seasons)
+            if len(calls) <= len(failures):
+                raise failures[len(calls) - 1]
+            return "ok"
+
+        return load, calls
+
+    @pytest.mark.parametrize(
+        "cause",
+        [
+            requests.exceptions.ConnectionError("connection reset"),
+            requests.exceptions.ReadTimeout("read timed out"),
+            requests.exceptions.ChunkedEncodingError("cut off mid-file"),
+            http_error(502),
+            http_error(429),
+        ],
+    )
+    def test_a_transient_failure_is_retried(self, cause):
+        load, calls = self.loader(nflreadpy_error(cause), nflreadpy_error(cause))
+        waits = []
+        assert fetch(load, seasons=[2026], sleep=waits.append) == "ok"
+        assert len(calls) == 3 and waits == list(WAITS[:2])
+
+    @pytest.mark.parametrize(
+        "err",
+        [
+            nflreadpy_error(http_error(404)),  # not published: fall back now
+            ConnectionError("no cause: nothing says it was the network"),
+            ValueError("Failed to parse data"),
+        ],
+    )
+    def test_anything_else_fails_at_once(self, err):
+        load, calls = self.loader(err)
+        with pytest.raises(type(err)):
+            fetch(load, seasons=[2026], sleep=lambda s: None)
+        assert len(calls) == 1
+
+    def test_it_gives_up_after_the_last_wait(self):
+        err = nflreadpy_error(requests.exceptions.ConnectionError("down"))
+        load, calls = self.loader(*[err] * (len(WAITS) + 1))
+        with pytest.raises(ConnectionError):
+            fetch(load, seasons=[2026], sleep=lambda s: None)
+        assert len(calls) == len(WAITS) + 1
+
+    def test_load_seasons_retries_before_falling_back(self):
+        yr = date.today().year
+        blip = nflreadpy_error(requests.exceptions.ReadTimeout("slow"))
+        missing = nflreadpy_error(http_error(404))
+        load, calls = self.loader(blip, missing)
+        with patch("src.ingest.fetch.time.sleep"):
+            assert load_seasons(load, [yr - 1, yr], underway=False) == "ok"
+        assert calls == [[yr - 1, yr], [yr - 1, yr], [yr - 1]]
 
 
 class TestSeasonUnderway:

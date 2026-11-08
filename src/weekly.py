@@ -73,11 +73,12 @@ def games_near_now(now=None) -> pd.DataFrame:
     one small file, so asking costs seconds when the answer is no."""
     import nflreadpy as nfl
 
+    from src.ingest.fetch import fetch
     from src.ingest.seasons import current_season
     from src.schedule import games_near
 
     season = current_season()
-    sched = nfl.load_schedules(seasons=[season - 1, season]).to_pandas()
+    sched = fetch(nfl.load_schedules, seasons=[season - 1, season]).to_pandas()
     return games_near(sched, now if now is not None else pd.Timestamp.now(tz="UTC"))
 
 

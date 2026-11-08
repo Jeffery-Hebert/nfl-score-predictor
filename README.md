@@ -284,6 +284,17 @@ Between seasons each run stops after one schedule check.
   **Actions** tab shows the current week's forecasts, and the leaderboard on
   Tuesdays. The ledger page, model report and logs are attached as downloads.
 - **Failures** are emailed by GitHub, and nothing half-finished is committed.
+  Two failed runs in a row also open an issue titled *The pipeline is failing*,
+  with the end of the log in it; the next successful run closes it. (One-off
+  failures, such as nflverse publishing late, usually clear by themselves.)
+- **Pushing a fix runs it at once:** a push to `master` that changes code,
+  tests, config or requirements starts the pipeline immediately, and it commits
+  whatever forecasts are ready, just as the next scheduled run would.
+- **What it runs on is pinned.** The machine image (`ubuntu-26.04`), Python and
+  every package are fixed versions, and Python carries its own time-zone
+  database (`tzdata`), so nothing changes underneath the pipeline unless a
+  commit changes it. Downloads from nflverse are retried through network
+  failures (`src/ingest/fetch.py`).
 - **By hand:** Actions → pipeline → *Run workflow* (options: backtest, publish,
   forecast early), or `gh workflow run pipeline.yml -f backtest=true`.
 - **Pause:** Actions → pipeline → ⋯ → *Disable workflow*.
@@ -869,6 +880,18 @@ the spread to cover the vig. The composite is at 50.6% (95% interval 48.2–53.1
 which is a coin flip. It predicts *scores* respectably and it does not predict
 *market inefficiency* at all. Those are different jobs, and only the first one is
 going well.
+
+**Outage, 2026-10-30 to 11-08.** Every scheduled run failed for nine days, and
+the forecasts it would have made are missing from the ledger: week 8 has only
+its Thursday game, and week 9 lacks Thursday's JAX @ BAL and the 9:30am CIN @
+ATL. Nothing in the repository had changed. GitHub moved `ubuntu-latest` to
+Ubuntu 26.04, whose time-zone database no longer answers to the legacy name
+`US/Eastern` the code used, so the first kickoff-time conversion of every run
+crashed. Fixed by naming the zone canonically in one place
+(`src/schedule.py`), shipping Python's own time-zone database, and pinning the
+image. The failure alarm above exists so that an outage like this is an open
+issue within a day instead of a stack of emails. The missing games stay
+missing: a forecast made after kickoff would be a backfill, not a prediction.
 
 **Known gaps:**
 - No live starting-quarterback source for future games. Historical rows know who

@@ -37,6 +37,7 @@ if __package__ in (None, ""):  # run as a file: python src/ingest/<this>.py
 import nflreadpy as nfl  # noqa: E402
 
 from src.ingest.manifest import record_pull  # noqa: E402
+from src.ingest.fetch import fetch  # noqa: E402
 from src.ingest.seasons import load_seasons  # noqa: E402
 from src.ingest.seasons import seasons as seasons_to_pull  # noqa: E402
 
@@ -56,7 +57,7 @@ def main():
     record_pull("snap_counts", out_dir / "snap_counts.parquet", snaps, seasons)
     print(f"Pulled {len(snaps)} snap-count rows")
 
-    players = nfl.load_players().to_pandas()
+    players = fetch(nfl.load_players).to_pandas()
     keep = [
         c
         for c in ["gsis_id", "pfr_id", "display_name", "position"]

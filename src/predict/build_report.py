@@ -467,12 +467,14 @@ def html_for(data: dict) -> str:
     # "</" inside a string would end the <script> early; "<\/" is the same
     # JSON string and cannot.
     payload = json.dumps(data, separators=(",", ":")).replace("</", "<\\/")
-    return SHELL.format(body=TEMPLATE.read_text().replace("__DATA__", payload))
+    return SHELL.format(
+        body=TEMPLATE.read_text(encoding="utf-8").replace("__DATA__", payload)
+    )
 
 
 def embedded(path) -> dict:
     """The data a page was built from, read back out of the page itself."""
-    html = Path(path).read_text()
+    html = Path(path).read_text(encoding="utf-8")
     start = html.index(DATA_MARKER) + len(DATA_MARKER)
     data, _ = json.JSONDecoder().raw_decode(html, start)
     return data
@@ -589,7 +591,7 @@ def render(pred_dir=PRED_DIR, schedules=SCHEDULES) -> dict:
     data = build(pred_dir, schedules)
     out = Path(pred_dir) / "index.html"
     tmp = out.with_suffix(".html.tmp")
-    tmp.write_text(html_for(data))
+    tmp.write_text(html_for(data), encoding="utf-8")
     problems = verify(tmp, pred_dir)
     if problems:
         tmp.unlink()

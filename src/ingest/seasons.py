@@ -75,9 +75,14 @@ def load_seasons(loader, seasons_wanted: list[int], underway: bool | None = None
     weight would have been read from last season. Once the newest season has
     been underway for a week (season_underway; `underway` overrides, for tests),
     a failure loading it raises like any other.
+
+    Network failures are retried first (src/ingest/fetch.py); a season that is
+    not published yet is a 404, which is not, so the fallback is immediate.
     """
+    from src.ingest.fetch import fetch
+
     try:
-        return loader(seasons=seasons_wanted)
+        return fetch(loader, seasons=seasons_wanted)
     except Exception as err:
         newest = seasons_wanted[-1]
         if len(seasons_wanted) < 2 or newest < date.today().year:
@@ -90,4 +95,4 @@ def load_seasons(loader, seasons_wanted: list[int], underway: bool | None = None
             f"NOTE: no data published for {newest} yet ({type(err).__name__}); "
             f"pulling {seasons_wanted[0]}-{seasons_wanted[-2]}"
         )
-        return loader(seasons=seasons_wanted[:-1])
+        return fetch(loader, seasons=seasons_wanted[:-1])

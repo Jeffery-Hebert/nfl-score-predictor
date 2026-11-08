@@ -42,9 +42,44 @@ def crons(wf):
     return [c["cron"] for c in wf["on"]["schedule"]]
 
 
+def step_named(wf, prefix):
+    return next(s for s in steps(wf) if s.get("name", "").startswith(prefix))
+
+
 class TestTheWorkflow:
-    def test_it_may_commit_and_nothing_more(self, wf):
-        assert wf["permissions"] == {"contents": "write"}
+    def test_it_may_commit_and_raise_its_alarm_and_nothing_more(self, wf):
+        assert wf["permissions"] == {
+            "contents": "write",  # the forecast records
+            "issues": "write",  # the failure alarm
+            "actions": "read",  # how the previous run ended
+        }
+
+    def test_the_runner_image_is_pinned_and_is_the_one_ci_tests_on(self, wf):
+        # ubuntu-latest moved to Ubuntu 26.04 under the pipeline mid-season and
+        # every run from 2026-10-30 to 11-08 failed: the OS must change only in
+        # a commit, and the tests must run on the image the pipeline runs on.
+        image = wf["jobs"]["pipeline"]["runs-on"]
+        assert "latest" not in image
+        ci = yaml.safe_load(Path(".github/workflows/tests.yml").read_text())
+        assert ci["jobs"]["test"]["runs-on"] == image
+
+    def test_a_pushed_fix_runs_at_once_and_publishes(self, wf):
+        push = wf["on"]["push"]
+        assert push["branches"] == ["master"]
+        for path in ("src/**", "requirements.txt", ".github/workflows/pipeline.yml"):
+            assert path in push["paths"]
+        assert "'workflow_dispatch'" in wf["jobs"]["pipeline"]["env"]["PUBLISH"]
+
+    def test_a_lasting_failure_raises_an_alarm_that_cannot_fail_the_run(self, wf):
+        alarm = step_named(wf, "Raise or clear the failure alarm")
+        assert alarm is steps(wf)[-1], "last, so job.status covers every step"
+        assert "always()" in alarm["if"] and alarm["continue-on-error"] is True
+        assert alarm["env"]["STATUS"] == "${{ job.status }}"
+        run = alarm["run"]
+        assert "gh issue close" in run  # cleared by the next success
+        # raised only when the run before this one failed too, and only once
+        assert "--status completed" in run and '!= "failure"' in run
+        assert run.index('if [ -n "$open" ]') < run.index("gh issue create")
 
     def test_runs_never_overlap(self, wf):
         assert wf["concurrency"]["cancel-in-progress"] is False
@@ -113,11 +148,7 @@ class TestTheWorkflow:
         )
 
     def test_records_and_a_verified_ledger_are_all_that_is_committed(self, wf):
-        commit = next(
-            s
-            for s in steps(wf)
-            if s.get("name", "").startswith("Commit changed forecasts")
-        )
+        commit = step_named(wf, "Commit changed forecasts")
         run = commit["run"]
         assert "git add data/predictions/*.parquet" in run
         # the page only goes in once it verifies against the records

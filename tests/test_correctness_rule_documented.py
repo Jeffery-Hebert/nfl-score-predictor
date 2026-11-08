@@ -43,20 +43,20 @@ PLACES = {
 
 @pytest.mark.parametrize("path", sorted(PLACES))
 def test_the_rule_is_stated(path):
-    text = Path(path).read_text().lower()
+    text = Path(path).read_text(encoding="utf-8").lower()
     for phrase in PLACES[path]:
         assert phrase.lower() in text, f"{path} no longer states: {phrase!r}"
 
 
 def test_the_readme_states_it_before_any_accuracy_number_is_explained():
     """Section 1 -- read before anything else, by the readers it is for."""
-    text = Path("README.md").read_text()
+    text = Path("README.md").read_text(encoding="utf-8")
     rule = text.index("The one rule above accuracy: correct before accurate")
     assert rule < text.index("## 2. Vocabulary you'll need")
 
 
 def test_the_skill_puts_it_above_the_objective_priority():
-    text = (SKILL / "SKILL.md").read_text()
+    text = (SKILL / "SKILL.md").read_text(encoding="utf-8")
     assert text.index("## Correctness Before Accuracy") < text.index(
         "## Objective Priority"
     )

@@ -31,7 +31,9 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    # The image the pipeline runs on, pinned there (see pipeline.yml): code is
+    # tested on the machine that will run it.
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v5
 

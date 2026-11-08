@@ -14,13 +14,14 @@ if __package__ in (None, ""):  # run as a file: python src/ingest/<this>.py
 
 import nflreadpy as nfl  # noqa: E402
 
+from src.ingest.fetch import fetch  # noqa: E402
 from src.ingest.manifest import record_pull  # noqa: E402
 from src.ingest.seasons import seasons as seasons_to_pull  # noqa: E402
 
 
 def main():
     seasons = seasons_to_pull()
-    df = nfl.load_schedules(seasons=seasons).to_pandas()
+    df = fetch(nfl.load_schedules, seasons=seasons).to_pandas()
 
     out_dir = Path("data/raw")
     out_dir.mkdir(parents=True, exist_ok=True)
